@@ -1,0 +1,677 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# Copyright (c) 2021 tecnovert
+# Distributed under the MIT software license, see the accompanying
+# file LICENSE.txt or http://www.opensource.org/licenses/mit-license.php.
+
+"""
+
+~/tmp/particl-0.19.2.5/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+
+rm -r /tmp/anon_stats || true
+mkdir -p /tmp/anon_stats
+python anon_stats_sqlite.py -outputdir=/tmp/anon_stats -knowninfodir=~/known_wallets -totime=1614268800 > /tmp/anon_stats.txt
+
+"""
+
+__version__ = '0.1'
+
+import os
+import sys
+import json
+import time
+import signal
+import decimal
+import logging
+import sqlite3
+import traceback
+
+from util import (
+    COIN,
+    format8,
+    open_rpc)
+
+
+DEBUG = True
+MAX_MONEY = 21000000 * COIN
+chain_stats = None
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(message)s')
+
+
+class AnonOutValue:
+    __slots__ = ('amount', 'known')
+
+    def __init__(self, amount, known):
+        self.amount = amount
+        self.known = known
+
+
+class CTOutput():
+    __slots__ = ('value', 'known')
+
+    def __init__(self, value, known):
+        self.value = value
+        self.known = known
+
+
+class Prevout():
+    __slots__ = ('txid', 'n')
+
+    def __init__(self, txid, n):
+        self.txid = txid
+        self.n = int(n)
+
+    def __hash__(self):
+        return hash((self.txid, self.n))
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            return NotImplemented
+        return self.txid == other.txid and self.n == other.n
+
+
+class SpentAnonOut:
+    __slots__ = ('spent_type', 'spent_height', 'txid')
+
+    def __init__(self, spent_type, spent_height, txid):
+        self.spent_type = spent_type  # S for spent, 0 for a 0 output
+        self.spent_height = spent_height
+        self.txid = txid
+
+
+class ChainTracker():
+    def callrpc(self, method, params=[]):
+        # TODO: Reusing the connection seems slower in linux
+        for i in range(3):
+            try:
+                if self.rpc_conn is None:
+                    self.rpc_conn = open_rpc(self.rpc_port, self.rpc_auth)
+                try:
+                    v = self.rpc_conn.json_request(method, params)
+                    r = json.loads(v.decode('utf-8'))
+                except Exception as e:
+                    traceback.print_exc()
+                    self.rpc_conn.close()
+                    self.rpc_conn = None
+                    raise ValueError('RPC Server Error')
+                if 'error' in r and r['error'] is not None:
+                    raise ValueError('RPC error ' + str(r['error']))
+                return r['result']
+            except Exception as e:
+                logging.error('RPC Server Error, try {}: {}'.format(i, str(e)))
+        raise ValueError('RPC retries failed.')
+
+    def __init__(self, settings):
+        self.is_running = True
+        self.rpc_conn = None
+
+        self.settings = settings
+
+        self.particl_data_dir = os.path.expanduser(settings['data_dir'])
+        self.chain = settings.get('chain', '')
+        self.debug = settings.get('chain', DEBUG)
+
+        self.processed_height = settings.get('fromheight', 0)
+        self.totime = settings.get('totime', 0)
+
+        self.value_aos = {}
+        self.spent_aos = {}
+        self.source_aos = {}  # key anon_index, value source txid
+        self.known_wallets = {}
+        self.num_anon_txns = 0
+        self.num_anon_outputs = 0
+        self.num_mlsag_rows = 0
+
+        self.sum_blind_added = 0
+        self.sum_blind_removed = 0
+        self.sum_anon_added = 0
+        self.sum_anon_removed = 0
+
+        self.ct_outputs = {}
+
+        self.lastHeightParametersSet = -1
+
+        self.output_dir = settings.get('output_dir', '.')
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+        with open(os.path.join(self.output_dir, 'chain_stats.csv'), 'w') as fp:
+            fp.write('height,txid,types,ct_fee,anon inputs,anon outputs,blinded inputs,blinded outputs,plain in,plain out,anon added,anon removed,blind added,blind removed, max possible blind in,sum anon added,sum anon removed,sum blind added,sum blind removed, sum anon+blind added, sum anon+blind removed\n')
+
+        # Wait for daemon to start
+        authcookiepath = os.path.join(self.particl_data_dir, '' if self.chain == 'mainnet' else self.chain, '.cookie')
+        for i in range(10):
+            if not os.path.exists(authcookiepath):
+                time.sleep(0.5)
+        with open(authcookiepath) as fp:
+            self.rpc_auth = fp.read()
+
+        # Read rpc port from .conf file
+        if 'rpcport' not in settings:
+            configpath = os.path.join(self.particl_data_dir, '' if self.chain == 'mainnet' else self.chain, 'particl.conf')
+            if os.path.exists(configpath):
+                with open(configpath) as fp:
+                    for line in fp:
+                        if line.startswith('#'):
+                            continue
+                        pair = line.strip().split('=')
+                        if len(pair) == 2:
+                            if pair[0] == 'rpcport':
+                                settings['rpcport'] = int(pair[1])
+                                logging.info('Set rpcport from config file: {}.'.format(settings['rpcport']))
+
+        self.rpc_port = settings.get('rpcport', 51735 if self.chain == 'mainnet' else 51935)
+
+        db_path = os.path.join(self.output_dir, 'chain_stats.db')
+        if os.path.exists(db_path):
+            os.remove(db_path)
+        self.dbc = sqlite3.connect(db_path)
+
+        c = self.dbc.cursor()
+        c.execute('''CREATE TABLE blocks
+                     (height INTEGER, blockhash TEXT, sum_anon_added INTEGER, sum_anon_removed INTEGER,
+                      sum_blind_added INTEGER, sum_blind_removed INTEGER)''')
+
+        c.execute('''CREATE TABLE transactions
+                     (height INTEGER, txid TEXT, tx_type TEXT, ct_fee INTEGER,
+                      plain_in INTEGER, plain_out INTEGER, anon_added INTEGER, anon_removed INTEGER,
+                      blind_added INTEGER, blind_removed INTEGER, max_possible_blind_in INTEGER)''')
+
+        c.execute('''CREATE TABLE outputs
+                     (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_height INTEGER, spent_txid TEXT, has_anon_ancestor INTEGER)''')
+
+        c.execute('''CREATE TABLE anon_inputs
+                     (txid TEXT, n INTEGER, inputs INTEGER, ring_size INTEGER, prevouts TEXT)''')
+
+        c.execute('''CREATE TABLE anon_out_estimate_adj
+                     (anon_index INTEGER, txid TEXT, reduce_by INTEGER)''')
+
+        self.dbc.commit()
+        self.db_cursor = self.dbc.cursor()
+
+    def __del__(self):
+        if self.rpc_conn is not None:
+            self.rpc_conn.close()
+        self.dbc.commit()
+        self.dbc.close()
+
+    def start(self):
+        logging.info('Starting Chain stats script at height %d\n' % (self.processed_height))
+
+        self.waitForDaemonRPC()
+
+        r = self.callrpc('getnetworkinfo')
+        logging.info('Particl Core version %s\n' % (r['version']))
+
+    def stopRunning(self):
+        self.is_running = False
+
+    def waitForDaemonRPC(self):
+        for i in range(21):
+            if not self.is_running:
+                return
+            if i == 20:
+                logging.error('Can\'t connect to daemon RPC, exiting.')
+                self.stopRunning(1)
+                return
+            try:
+                self.callrpc('getblockchaininfo')
+                break
+            except Exception as ex:
+                traceback.print_exc()
+                logging.warning('Can\'t connect to daemon RPC, trying again in %d second/s.' % (1 + i))
+                time.sleep(1 + i)
+
+    def processBlock(self, height):
+        if height % 10000 == 0:
+            logging.info('processBlock height %d' % (height))
+            logging.info('num_anon_outputs, num_mlsag_rows: {}, {}'.format(self.num_anon_outputs, self.num_mlsag_rows))
+
+            self.dbc.commit()
+            self.db_cursor = self.dbc.cursor()
+
+        blockhash = self.callrpc('getblockhash', [height, ])
+        #logging.info('blockhash %s' % (blockhash))
+        #block = self.callrpc('getblock', [blockhash, 3])
+        block = self.callrpc('getblock', [blockhash])
+
+        if self.totime > 0 and self.totime < block['time']:
+            logging.info('Stopping before block {}, time {} > {}'.format(height, block['time'], self.totime))
+            return False
+
+        for txh in block['tx']:
+            # TODO: Add ring_row_ to tx output in getblock
+            tx = self.callrpc('getrawtransaction', [txh, True])
+            #print('tx', json.dumps(tx, indent=4))
+
+            num_blinded_in = 0
+            num_blinded_out = 0
+            num_anon_in = 0
+            num_anon_out = 0
+            total_plain_in = 0
+            total_plain_out = 0
+
+            has_tainted_blinded_input = False
+
+            tx_type = 'p->p'
+            rsi = []
+            new_anon_outputs = []
+            new_blind_outputs = []
+            max_possible_blinded_value_in = 0  # TODO: reduce max when multiple blind inputs have the same txid and spend all outputs from there
+            for txi_n, tx_input in enumerate(tx['vin']):
+                #print('tx_input', json.dumps(tx_input, indent=4))
+                if 'coinbase' in tx_input:
+                    continue
+                if 'txid' in tx_input and tx_input['txid'] == '0000000000000000000000000000000000000000000000000000000000000000':
+                    continue  # Coinbase
+
+                if 'type' in tx_input and tx_input['type'] == 'anon':
+                    num_anon_in += 1
+
+                    ring_members = []
+                    for i in range(1000):
+                        row = 'ring_row_{}'.format(i)
+                        if row not in tx_input:
+                            break
+                        ring_members.append(tx_input[row])
+                    rsi.append([tx_input['num_inputs'], tx_input['ring_size'], ring_members])
+
+                    self.db_cursor.execute('INSERT INTO anon_inputs (txid, n, inputs, ring_size, prevouts)  VALUES (?, ?, ?, ?, ?)',
+                                           (txh, txi_n, tx_input['num_inputs'], tx_input['ring_size'], '\n'.join(ring_members)))
+
+                    continue
+
+                prev_tx = self.callrpc('getrawtransaction', [tx_input['txid'], True])
+                #print('prev_tx', json.dumps(prev_tx, indent=4))
+                prevout = prev_tx['vout'][tx_input['vout']]
+                prevout_type = prevout['type']
+
+                if prevout_type == 'blind':
+                    num_blinded_in += 1
+                    max_possible_blinded_value_in += self.ct_outputs[Prevout(tx_input['txid'], tx_input['vout'])].value
+
+                    self.db_cursor.execute('UPDATE outputs SET spent_txid = ? WHERE txid = ? AND n = ?',
+                                           (txh, tx_input['txid'], tx_input['vout']))
+
+                    if has_tainted_blinded_input is False:
+                        self.db_cursor.execute('SELECT has_anon_ancestor FROM outputs WHERE txid = ? AND n = ?',
+                                               (tx_input['txid'], tx_input['vout']))
+                        if self.db_cursor.fetchone()[0] > 0:
+                            has_tainted_blinded_input = True
+
+                elif prevout_type == 'standard':
+                    total_plain_in += prevout['valueSat']
+
+            for tx_out in tx['vout']:
+                #print(tx_out)
+                tx_out_type = tx_out['type']
+                if tx_out_type == 'anon':
+                    num_anon_out += 1
+                    pubkey = tx_out['pubkey']
+
+                    ao = self.callrpc('anonoutput', [pubkey])
+                    new_anon_outputs.append((int(ao['index']), Prevout(tx['txid'], tx_out['n'])))
+                    self.source_aos[int(ao['index'])] = tx['txid']
+
+                if tx_out_type == 'blind':
+                    num_blinded_out += 1
+                    new_blind_outputs.append(Prevout(tx['txid'], tx_out['n']))
+                elif tx_out_type == 'standard':
+                    total_plain_out += tx_out['valueSat']
+
+            #print('total_plain_in', total_plain_in)
+            #print('total_plain_out', total_plain_out)
+
+            blind_removed = 0
+            blind_added = 0
+            anon_removed = 0
+            anon_added = 0
+
+            if num_blinded_in > 0:
+                #print('Spending_blinded')
+                if num_anon_out > 0 and total_plain_out == 0:
+                    tx_type = 'b->a'
+                elif num_blinded_out > 0 and total_plain_out == 0:
+                    tx_type = 'b->b'
+                else:
+                    tx_type = 'b->p'
+
+                ct_fee = tx['vout'][0]['ct_fee']
+                ct_fee = int(decimal.Decimal(ct_fee) * decimal.Decimal(COIN))
+                #print(ct_fee)
+                #ct_fee = dquantize(ct_fee)
+
+                #print('ct_fee', ct_fee)
+                total_plain_out += ct_fee
+
+                blind_removed = total_plain_out
+            elif num_anon_in > 0:
+                #print('Spending_anon')
+                if num_blinded_out > 0 and total_plain_out == 0:
+                    tx_type = 'a->b'
+                elif num_anon_out > 0 and total_plain_out == 0:
+                    tx_type = 'a->a'
+                else:
+                    tx_type = 'a->p'
+
+                ct_fee = tx['vout'][0]['ct_fee']
+                ct_fee = int(decimal.Decimal(ct_fee) * decimal.Decimal(COIN))
+                #print(ct_fee)
+                #ct_fee = dquantize(ct_fee)
+
+                #print('ct_fee', ct_fee)
+                total_plain_out += ct_fee
+
+                anon_removed = total_plain_out
+
+            if num_blinded_out > 0 and total_plain_in > 0:
+                tx_type = 'p->b'
+                ct_fee = int(decimal.Decimal(tx['vout'][0]['ct_fee']) * decimal.Decimal(COIN))
+                blind_added = total_plain_in - (total_plain_out + ct_fee)
+
+            elif num_anon_out > 0 and total_plain_in > 0:
+                tx_type = 'p->a'
+                ct_fee = int(decimal.Decimal(tx['vout'][0]['ct_fee']) * decimal.Decimal(COIN))
+                anon_added = total_plain_in - (total_plain_out + ct_fee)
+
+            self.sum_blind_added += blind_added
+            self.sum_blind_removed += blind_removed
+            self.sum_anon_added += anon_added
+            self.sum_anon_removed += anon_removed
+
+            max_anon_in_value_possible = 0
+            # Each unknown anonoutput is estimated to be the maximum possible value at each txn
+            #   if using multiple estimated outputs from the same txn, only use one for the new estimate
+            used_anon_outs_from_txs = set()
+            if len(rsi) > 0:
+                try:
+                    for inp in rsi:
+                        ringmember_rows = []
+                        sum_column_vals = [0] * inp[1]
+                        for row in inp[2]:
+                            new_row = []
+                            ais = row.split(',')
+                            for column, anon_index in enumerate(ais):
+                                ai = int(anon_index.strip())
+                                source_tx = self.source_aos[ai]
+                                value_obj = chain_stats.value_aos[ai]
+                                # TODO: needs adjustment for multi row anoninputs
+                                if value_obj.known or source_tx not in used_anon_outs_from_txs:
+                                    used_anon_outs_from_txs.add(source_tx)
+                                    sum_column_vals[column] += value_obj.amount
+                        #print('sum_column_vals', sum_column_vals)
+                        max_anon_in_value_possible += max(sum_column_vals)
+                except Exception as e:
+                    print('Unable to estimate input value for', tx['txid'], str(e))
+                #print('max_anon_in_value_possible', max_anon_in_value_possible)
+
+            for bo in new_blind_outputs:
+                possible_value = 0
+                if max_possible_blinded_value_in > 0:
+                    possible_value = max_possible_blinded_value_in - total_plain_out
+                elif max_anon_in_value_possible > 0:
+                    possible_value = max_anon_in_value_possible - total_plain_out
+                else:
+                    possible_value = blind_added
+
+                if possible_value > MAX_MONEY:
+                    possible_value = MAX_MONEY
+
+                anon_tainted = 1 if num_anon_in > 0 or has_tainted_blinded_input else 0
+                self.ct_outputs[bo] = CTOutput(possible_value, False)
+                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, value, has_anon_ancestor)  VALUES (?, ?, ?, ?, ?)',
+                                       (bo.txid, bo.n, 'B', possible_value, anon_tainted))
+
+            if max_possible_blinded_value_in < blind_removed:
+                print('max_possible_blinded_value_in < blind_removed', tx['txid'])
+            if max_anon_in_value_possible < anon_removed:
+                print('max_anon_in_value_possible < anon_removed', tx['txid'])
+
+            if num_blinded_in > 0 or num_blinded_out > 0 or num_anon_in > 0 or num_anon_out > 0:
+                ct_fee = int(decimal.Decimal(tx['vout'][0]['ct_fee']) * decimal.Decimal(COIN))
+
+                self.db_cursor.execute('''INSERT INTO transactions (
+                                          height, txid, tx_type, ct_fee,
+                                          plain_in, plain_out, anon_added, anon_removed,
+                                          blind_added, blind_removed, max_possible_blind_in) VALUES (
+                                          ?, ?, ?, ?,
+                                          ?, ?, ?, ?,
+                                          ?, ?, ?)''',
+                                       (height, tx['txid'], tx_type, ct_fee,
+                                        total_plain_in, total_plain_out, anon_added, anon_removed,
+                                        blind_added, blind_removed, max_possible_blinded_value_in,))
+
+                with open(os.path.join(self.output_dir, 'chain_stats.csv'), 'a') as fp:
+                    fp.write('%d,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n'
+                             % (height,
+                                tx['txid'],
+                                tx_type,
+                                ct_fee,
+                                num_anon_in,
+                                num_anon_out,
+                                num_blinded_in,
+                                num_blinded_out,
+                                total_plain_in,
+                                total_plain_out,
+                                anon_added,
+                                anon_removed,
+                                blind_added,
+                                blind_removed,
+                                max_possible_blinded_value_in,
+                                self.sum_anon_added,
+                                self.sum_anon_removed,
+                                self.sum_blind_added,
+                                self.sum_blind_removed,
+                                self.sum_anon_added + self.sum_blind_added,
+                                self.sum_anon_removed + self.sum_blind_removed))
+
+                    if num_anon_in > 0 or anon_removed > 0 or anon_added > 0:
+                        self.num_anon_txns += 1
+                        for wk, wd in self.known_wallets.items():
+                            if tx['txid'] in wd['txids']:
+                                fp.write('known tx,%s\n' % (wk))
+                                break
+
+                    if len(new_anon_outputs) > 0:
+                        #fp.write('new aos,%s \n' % (' '.join(str(x) for x in new_anon_outputs)))
+
+                        max_value = 0
+                        if total_plain_in > 0:
+                            max_value = (anon_added - anon_removed)
+                        elif max_possible_blinded_value_in > 0:
+                            max_value = max_possible_blinded_value_in - total_plain_out
+                        else:
+                            max_value = max_anon_in_value_possible - total_plain_out
+
+                        if max_value > MAX_MONEY:
+                            max_value = MAX_MONEY
+
+                        display = []
+                        for nao in new_anon_outputs:
+                            self.num_anon_outputs += 1
+                            known = False
+                            if nao[0] in self.value_aos:
+                                aov = self.value_aos[nao[0]]
+                                ao_max_val = aov.amount
+                                known = aov.known
+                                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, is_estimate)  VALUES (?, ?, ?, ?, ?, ?)',
+                                                       (nao[1].txid, nao[1].n, 'A', nao[0], aov.amount, 0))
+                            else:
+                                ao_max_val = max_value
+                                if max_value > 0:
+                                    chain_stats.value_aos[nao[0]] = AnonOutValue(ao_max_val, False)
+
+                                    self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value)  VALUES (?, ?, ?, ?, ?)',
+                                                           (nao[1].txid, nao[1].n, 'A', nao[0], ao_max_val))
+
+                            if max_value > 0:
+                                display.append('{} [{}{}]'.format(nao[0], '' if known else '<', ao_max_val))
+                            else:
+                                display.append(str(nao[0]))
+
+                        fp.write('new aos,%s \n' % (' '.join(display)))
+
+                    if len(rsi) > 0:
+                        for inp in rsi:
+                            ringmember_rows = []
+                            for row in inp[2]:
+                                self.num_mlsag_rows += 1
+                                new_row = []
+                                ais = row.split(',')
+                                for anon_index in ais:
+                                    ai = int(anon_index.strip())
+
+                                    is_spent = False
+                                    if ai in self.spent_aos:
+                                        if self.spent_aos[ai].spent_height < height:
+                                            is_spent = True
+                                    if ai in self.value_aos:
+                                        aov = self.value_aos[ai]
+                                        new_row.append('{}{}[{}{}]'.format(ai, 'S' if is_spent else '_', '' if aov.known else '<', aov.amount))
+                                    else:
+                                        new_row.append('{}{}'.format(ai, 'S' if is_spent else '_',))
+                                ringmember_rows.append(' '.join(new_row))
+
+                            ringmembers = '"(' + '),\n('.join(ringmember_rows) + ')"'
+                            fp.write('"%d,%d",%s\n' % (int(inp[0]), int(inp[1]), ringmembers))
+
+        self.db_cursor.execute('INSERT INTO blocks (height, blockhash, sum_anon_added, sum_anon_removed, sum_blind_added, sum_blind_removed)  VALUES (?, ?, ?, ?, ?, ?)',
+                               (height, blockhash, self.sum_anon_added, self.sum_anon_removed, self.sum_blind_added, self.sum_blind_removed))
+
+        self.processed_height = height
+        return True
+
+
+def signal_handler(sig, frame):
+    print('signal %d detected, ending program.' % (sig))
+    if chain_stats is not None:
+        chain_stats.stopRunning()
+
+
+def printHelp():
+    print('anon_stats.py --outputdir=path --datadir=path --knowninfodir=path --fromheight=x --totime=x')
+
+
+def main():
+    global chain_stats
+    settings = {
+        'chain': 'mainnet'
+    }
+
+    for v in sys.argv[1:]:
+        if len(v) < 2 or v[0] != '-':
+            logging.warning('Unknown argument', v)
+            continue
+
+        s = v.split('=')
+        name = s[0].strip()
+
+        for i in range(2):
+            if name[0] == '-':
+                name = name[1:]
+        if name == 'h' or name == 'help':
+            printHelp()
+            return 0
+        if name == 'testnet':
+            settings['chain'] = 'testnet'
+            continue
+        if name == 'regtest':
+            settings['chain'] = 'regtest'
+            continue
+
+        if len(s) == 2:
+            if name == 'datadir':
+                settings['data_dir'] = os.path.expanduser(s[1])
+                continue
+            if name == 'outputdir':
+                settings['output_dir'] = os.path.expanduser(s[1])
+                continue
+            if name == 'knowninfodir':
+                settings['knowninfodir'] = os.path.expanduser(s[1])
+                continue
+            if name == 'fromheight':
+                settings['fromheight'] = int(s[1])
+                continue
+            if name == 'totime':
+                settings['totime'] = int(s[1])
+                continue
+        logging.warning('Unknown argument', v)
+
+    if 'data_dir' not in settings:
+        if os.name == 'nt':
+            settings['data_dir'] = os.path.join(os.getenv('APPDATA'), 'Particl', '' if settings['chain'] == 'mainnet' else settings['chain'])
+        else:
+            settings['data_dir'] = os.path.join(os.path.expanduser('~/.particl'), '' if settings['chain'] == 'mainnet' else settings['chain'])
+
+    logging.info('chain, data_dir: {}, {}'.format(settings['chain'], settings['data_dir']))
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    logging.info('Ctrl + c to exit.')
+
+    logging.info(os.path.basename(sys.argv[0]) + ', version: ' + __version__ + '\n\n')
+
+    chain_stats = ChainTracker(settings)
+    chain_stats.start()
+
+    if 'knowninfodir' in settings:
+        knowninfodir = settings['knowninfodir']
+        files = os.listdir(knowninfodir)
+        for f in files:
+            known_txids = []
+            known_aos = {}
+            with open(os.path.join(knowninfodir, f)) as fpw:
+                for line in fpw:
+                    line = line.strip()
+                    if line.startswith('#'):
+                        continue
+                    split = line.split(',')
+
+                    if f == 'spent.txt':
+                        if len(split) == 4:
+                            aoi = int(split[0])
+                            chain_stats.spent_aos[aoi] = SpentAnonOut(split[1], int(split[2]), split[3])
+                        continue
+
+                    if len(line) == 64:
+                        known_txids.append(line)
+                        continue
+                    if len(split) >= 3:
+                        aoi = int(split[0])
+                        aov = int(split[2])
+                        known_aos[aoi] = aov
+                        chain_stats.value_aos[aoi] = AnonOutValue(aov, True)
+
+                        if len(split) > 3:
+                            # Verify commitment
+                            # TODO: Accept only verified outputs
+
+                            ao_rv = chain_stats.callrpc('anonoutput', [str(aoi)])
+                            txid = ao_rv['txnhash']
+                            vout = int(ao_rv['n'])
+                            source_tx = chain_stats.callrpc('getrawtransaction', [txid, True])
+
+                            value_commitment = source_tx['vout'][vout]['valueCommitment']
+                            verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(aov)])
+                            assert(verify_rv['result'] is True)
+
+            if len(known_txids) > 0 or len(known_aos) > 0:
+                chain_stats.known_wallets[f] = {'txids': known_txids, 'aos': known_aos}
+
+    try:
+        r = chain_stats.callrpc('getblockchaininfo')
+        while r['blocks'] > chain_stats.processed_height and chain_stats.is_running:
+            if not chain_stats.processBlock(chain_stats.processed_height + 1):
+                break
+    except Exception as ex:
+        traceback.print_exc()
+
+    logging.info('num_anon_txns     {}'.format(chain_stats.num_anon_txns))
+    logging.info('num_anon_outputs  {}'.format(chain_stats.num_anon_outputs))
+    logging.info('num_mlsag_rows    {}'.format(chain_stats.num_mlsag_rows))
+
+    print('Done.')
+
+
+if __name__ == '__main__':
+    main()
