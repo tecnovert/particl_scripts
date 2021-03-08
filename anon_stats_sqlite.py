@@ -398,7 +398,9 @@ class ChainTracker():
                                 # TODO: needs adjustment for multi row anoninputs
                                 if value_obj.known or source_tx not in used_anon_outs_from_txs:
                                     used_anon_outs_from_txs.add(source_tx)
-                                    sum_column_vals[column] += value_obj.amount
+
+                                    if ai not in self.spent_aos or self.spent_aos[ai].spent_height >= height:
+                                        sum_column_vals[column] += value_obj.amount
                         #print('sum_column_vals', sum_column_vals)
                         max_anon_in_value_possible += max(sum_column_vals)
                 except Exception as e:
@@ -490,19 +492,23 @@ class ChainTracker():
                         for nao in new_anon_outputs:
                             self.num_anon_outputs += 1
                             known = False
+
+                            spent_in_tx = None
+                            if nao[0] in self.spent_aos:
+                                spent_in_tx = self.spent_aos[nao[0]].txid
                             if nao[0] in self.value_aos:
                                 aov = self.value_aos[nao[0]]
                                 ao_max_val = aov.amount
                                 known = aov.known
-                                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, is_estimate)  VALUES (?, ?, ?, ?, ?, ?)',
-                                                       (nao[1].txid, nao[1].n, 'A', nao[0], aov.amount, 0))
+                                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, is_estimate, spent_txid)  VALUES (?, ?, ?, ?, ?, ?, ?)',
+                                                       (nao[1].txid, nao[1].n, 'A', nao[0], aov.amount, 0, spent_in_tx))
                             else:
                                 ao_max_val = max_value
                                 if max_value > 0:
                                     chain_stats.value_aos[nao[0]] = AnonOutValue(ao_max_val, False)
 
-                                    self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value)  VALUES (?, ?, ?, ?, ?)',
-                                                           (nao[1].txid, nao[1].n, 'A', nao[0], ao_max_val))
+                                    self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, spent_txid)  VALUES (?, ?, ?, ?, ?, ?)',
+                                                           (nao[1].txid, nao[1].n, 'A', nao[0], ao_max_val, spent_in_tx))
 
                             if max_value > 0:
                                 display.append('{} [{}{}]'.format(nao[0], '' if known else '<', ao_max_val))
@@ -522,9 +528,8 @@ class ChainTracker():
                                     ai = int(anon_index.strip())
 
                                     is_spent = False
-                                    if ai in self.spent_aos:
-                                        if self.spent_aos[ai].spent_height < height:
-                                            is_spent = True
+                                    if ai in self.spent_aos and self.spent_aos[ai].spent_height < height:
+                                        is_spent = True
                                     if ai in self.value_aos:
                                         aov = self.value_aos[ai]
                                         new_row.append('{}{}[{}{}]'.format(ai, 'S' if is_spent else '_', '' if aov.known else '<', aov.amount))
@@ -620,14 +625,19 @@ def main():
         for f in files:
             known_txids = []
             known_aos = {}
+
+            spend_section = False
             with open(os.path.join(knowninfodir, f)) as fpw:
                 for line in fpw:
                     line = line.strip()
                     if line.startswith('#'):
                         continue
+                    if line == 'Spends:':
+                        spend_section = True
+                        continue
                     split = line.split(',')
 
-                    if f == 'spent.txt':
+                    if f == 'spent.txt' or spend_section is True:
                         if len(split) == 4:
                             aoi = int(split[0])
                             chain_stats.spent_aos[aoi] = SpentAnonOut(split[1], int(split[2]), split[3])
@@ -657,6 +667,9 @@ def main():
 
             if len(known_txids) > 0 or len(known_aos) > 0:
                 chain_stats.known_wallets[f] = {'txids': known_txids, 'aos': known_aos}
+
+    logging.info('value_aos     {}'.format(len(chain_stats.value_aos)))
+    logging.info('spent_aos     {}'.format(len(chain_stats.spent_aos)))
 
     try:
         r = chain_stats.callrpc('getblockchaininfo')
