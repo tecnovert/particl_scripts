@@ -130,8 +130,6 @@ class ChainTracker():
 
         self.ct_outputs = {}
 
-        self.lastHeightParametersSet = -1
-
         self.output_dir = settings.get('output_dir', '.')
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
