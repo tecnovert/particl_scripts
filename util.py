@@ -16,6 +16,33 @@ from xmlrpc.client import (
 
 COIN = 100000000
 DCOIN = decimal.Decimal(COIN)
+__b58chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+
+def b58decode(v, length=None):
+    long_value = 0
+    for (i, c) in enumerate(v[::-1]):
+        ofs = __b58chars.find(c)
+        if ofs < 0:
+            return None
+        long_value += ofs * (58**i)
+    result = bytes()
+    while long_value >= 256:
+        div, mod = divmod(long_value, 256)
+        result = bytes((mod,)) + result
+        long_value = div
+    result = bytes((long_value,)) + result
+    nPad = 0
+    for c in v:
+        if c == __b58chars[0]:
+            nPad += 1
+        else:
+            break
+    pad = bytes((0,)) * nPad
+    result = pad + result
+    if length is not None and len(result) != length:
+        return None
+    return result
 
 
 def jsonDecimal(obj):
