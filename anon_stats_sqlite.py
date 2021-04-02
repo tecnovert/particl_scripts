@@ -15,7 +15,7 @@ python anon_stats_sqlite.py -outputdir=/tmp/anon_stats -knowninfodir=~/known_wal
 
 """
 
-__version__ = '0.1'
+__version__ = '0.2'
 
 import os
 import sys
@@ -115,6 +115,7 @@ class ChainTracker():
         self.processed_height = settings.get('fromheight', 0)
         self.totime = settings.get('totime', 0)
 
+        self.value_ctos = {}
         self.value_aos = {}
         self.spent_aos = {}
         self.source_aos = {}  # key anon_index, value source txid
@@ -173,7 +174,7 @@ class ChainTracker():
         c.execute('''CREATE TABLE transactions
                      (height INTEGER, txid TEXT, tx_type TEXT, ct_fee INTEGER,
                       plain_in INTEGER, plain_out INTEGER, anon_added INTEGER, anon_removed INTEGER,
-                      blind_added INTEGER, blind_removed INTEGER, max_possible_blind_in INTEGER)''')
+                      blind_added INTEGER, blind_removed INTEGER, max_possible_blind_in INTEGER, bad_tx INTEGER)''')
 
         c.execute('''CREATE TABLE outputs
                      (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_height INTEGER, spent_txid TEXT, has_anon_ancestor INTEGER)''')
@@ -407,25 +408,33 @@ class ChainTracker():
 
             for bo in new_blind_outputs:
                 possible_value = 0
-                if max_possible_blinded_value_in > 0:
-                    possible_value = max_possible_blinded_value_in - total_plain_out
-                elif max_anon_in_value_possible > 0:
-                    possible_value = max_anon_in_value_possible - total_plain_out
+                is_known = False
+                if bo in self.value_ctos:
+                    possible_value = self.value_ctos[bo]
+                    is_known = True
                 else:
-                    possible_value = blind_added
+                    if max_possible_blinded_value_in > 0:
+                        possible_value = max_possible_blinded_value_in - total_plain_out
+                    elif max_anon_in_value_possible > 0:
+                        possible_value = max_anon_in_value_possible - total_plain_out
+                    else:
+                        possible_value = blind_added
 
                 if possible_value > MAX_MONEY:
                     possible_value = MAX_MONEY
 
                 anon_tainted = 1 if num_anon_in > 0 or has_tainted_blinded_input else 0
-                self.ct_outputs[bo] = CTOutput(possible_value, False)
-                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, value, has_anon_ancestor)  VALUES (?, ?, ?, ?, ?)',
-                                       (bo.txid, bo.n, 'B', possible_value, anon_tainted))
+                self.ct_outputs[bo] = CTOutput(possible_value, is_known)
+                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, value, has_anon_ancestor, is_estimate)  VALUES (?, ?, ?, ?, ?, ?)',
+                                       (bo.txid, bo.n, 'B', possible_value, anon_tainted, 0 if is_known else 1))
 
+            bad_tx = False
             if max_possible_blinded_value_in < blind_removed:
                 print('max_possible_blinded_value_in < blind_removed', tx['txid'])
+                bad_tx = True
             if max_anon_in_value_possible < anon_removed:
                 print('max_anon_in_value_possible < anon_removed', tx['txid'])
+                bad_tx = True
 
             if num_blinded_in > 0 or num_blinded_out > 0 or num_anon_in > 0 or num_anon_out > 0:
                 ct_fee = int(decimal.Decimal(tx['vout'][0]['ct_fee']) * decimal.Decimal(COIN))
@@ -433,13 +442,13 @@ class ChainTracker():
                 self.db_cursor.execute('''INSERT INTO transactions (
                                           height, txid, tx_type, ct_fee,
                                           plain_in, plain_out, anon_added, anon_removed,
-                                          blind_added, blind_removed, max_possible_blind_in) VALUES (
+                                          blind_added, blind_removed, max_possible_blind_in, bad_tx) VALUES (
                                           ?, ?, ?, ?,
                                           ?, ?, ?, ?,
-                                          ?, ?, ?)''',
+                                          ?, ?, ?, ?)''',
                                        (height, tx['txid'], tx_type, ct_fee,
                                         total_plain_in, total_plain_out, anon_added, anon_removed,
-                                        blind_added, blind_removed, max_possible_blinded_value_in,))
+                                        blind_added, blind_removed, max_possible_blinded_value_in, 1 if bad_tx else 0))
 
                 with open(os.path.join(self.output_dir, 'chain_stats.csv'), 'a') as fp:
                     fp.write('%d,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n'
@@ -486,6 +495,9 @@ class ChainTracker():
                         if max_value > MAX_MONEY:
                             max_value = MAX_MONEY
 
+                        if max_value < 0:
+                            max_value = 0
+
                         display = []
                         for nao in new_anon_outputs:
                             self.num_anon_outputs += 1
@@ -499,19 +511,14 @@ class ChainTracker():
                                 ao_max_val = aov.amount
                                 known = aov.known
                                 self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, is_estimate, spent_txid)  VALUES (?, ?, ?, ?, ?, ?, ?)',
-                                                       (nao[1].txid, nao[1].n, 'A', nao[0], aov.amount, 0, spent_in_tx))
+                                                       (nao[1].txid, nao[1].n, 'A', nao[0], aov.amount, 0 if known else 1, spent_in_tx))
                             else:
                                 ao_max_val = max_value
-                                if max_value > 0:
-                                    chain_stats.value_aos[nao[0]] = AnonOutValue(ao_max_val, False)
+                                chain_stats.value_aos[nao[0]] = AnonOutValue(ao_max_val, False)
+                                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, is_estimate, spent_txid)  VALUES (?, ?, ?, ?, ?, ?, ?)',
+                                                       (nao[1].txid, nao[1].n, 'A', nao[0], ao_max_val, 1, spent_in_tx))
 
-                                    self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, spent_txid)  VALUES (?, ?, ?, ?, ?, ?)',
-                                                           (nao[1].txid, nao[1].n, 'A', nao[0], ao_max_val, spent_in_tx))
-
-                            if max_value > 0:
-                                display.append('{} [{}{}]'.format(nao[0], '' if known else '<', ao_max_val))
-                            else:
-                                display.append(str(nao[0]))
+                            display.append('{} [{}{}]'.format(nao[0], '' if known else '<', ao_max_val))
 
                         fp.write('new aos,%s \n' % (' '.join(display)))
 
@@ -617,6 +624,9 @@ def main():
     chain_stats = ChainTracker(settings)
     chain_stats.start()
 
+    duplicate_aov = 0
+    duplicate_aos = 0
+    duplicate_ctov = 0
     if 'knowninfodir' in settings:
         knowninfodir = settings['knowninfodir']
         files = os.listdir(knowninfodir)
@@ -624,6 +634,7 @@ def main():
             known_txids = []
             known_aos = {}
 
+            ctv_section = False
             spend_section = False
             with open(os.path.join(knowninfodir, f)) as fpw:
                 for line in fpw:
@@ -632,13 +643,39 @@ def main():
                         continue
                     if line == 'Spends:':
                         spend_section = True
+                        ctv_section = False
+                        continue
+                    if line == 'CT values:':
+                        ctv_section = True
+                        spend_section = False
                         continue
                     split = line.split(',')
 
                     if f == 'spent.txt' or spend_section is True:
                         if len(split) == 4:
                             aoi = int(split[0])
+                            if aoi in chain_stats.spent_aos:
+                                #logging.info('Duplicate aos: {}'.format(aoi))
+                                duplicate_aos += 1
+                                continue
                             chain_stats.spent_aos[aoi] = SpentAnonOut(split[1], int(split[2]), split[3])
+                        continue
+
+                    if ctv_section is True:
+                        if len(split) == 4:
+                            txid = split[0]
+                            vout = int(split[1])
+                            ctv = int(split[2])
+                            if Prevout(txid, vout) in chain_stats.value_ctos:
+                                #logging.info('Duplicate ctv: {}, {}'.format(txid, vout))
+                                duplicate_ctov += 1
+                                continue
+                            chain_stats.value_ctos[Prevout(txid, vout)] = ctv
+
+                            source_tx = chain_stats.callrpc('getrawtransaction', [txid, True])
+                            value_commitment = source_tx['vout'][vout]['valueCommitment']
+                            verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(ctv)])
+                            assert(verify_rv['result'] is True)
                         continue
 
                     if len(line) == 64:
@@ -648,6 +685,11 @@ def main():
                         aoi = int(split[0])
                         aov = int(split[2])
                         known_aos[aoi] = aov
+
+                        if aoi in chain_stats.value_aos:
+                            #logging.info('Duplicate aov: {}'.format(aoi))
+                            duplicate_aov += 1
+                            continue
                         chain_stats.value_aos[aoi] = AnonOutValue(aov, True)
 
                         if len(split) > 3:
@@ -668,6 +710,11 @@ def main():
 
     logging.info('value_aos     {}'.format(len(chain_stats.value_aos)))
     logging.info('spent_aos     {}'.format(len(chain_stats.spent_aos)))
+    logging.info('value_ctos    {}'.format(len(chain_stats.value_ctos)))
+
+    logging.info('duplicate value_aos     {}'.format(duplicate_aov))
+    logging.info('duplicate spent_aos     {}'.format(duplicate_aos))
+    logging.info('duplicate value_ctos    {}'.format(duplicate_ctov))
 
     try:
         r = chain_stats.callrpc('getblockchaininfo')

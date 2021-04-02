@@ -44,37 +44,73 @@ def main():
     num_anon_outputs = 0
     txid_set = set()
     anon_spends = []
+    ct_values = []
 
-    for r in input_json:
-        txid = r['txid']
-        txid_set.add(txid)
+    def inspect_traced_frozen_tx(tx):
+        for output in tx['outputs']:
+            n = output['n']
+            output_amount = output['value']
+            blindingfactor = output['blind']
+            if output['type'] == 'anon':
+                ao_index = output['anon_index']
+                ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [str(ao_index)])
+                pubkey = ao['publickey']
+                print('%d,%s,%d,%s' % (ao_index, pubkey, output_amount, blindingfactor))
 
-        tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txid, True])
+                if 'spent_by' in output:
+                    spendtx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [output['spent_by'], True])
+                    anon_spends.append((ao_index, 'S', spendtx['height'], output['spent_by']))
 
-        if 'anon_inputs' in r:
-            for ai in r['anon_inputs']:
-                prevtx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [ai['txid'], True])
-                ao_pk = prevtx['vout'][ai['n']]['pubkey']
-                ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [ao_pk, ])
-                ao_index = ao['index']
-                anon_spends.append((ao_index, 'S', prevtx['height'], ai['txid']))
+            elif output['type'] == 'blind':
+                ct_values.append((tx['txid'], n, output_amount, blindingfactor))
 
-        for vout_wallet in r['outputs']:
-            if vout_wallet['type'] == 'anon':
-                num_anon_outputs += 1
-                output_amount = make_int(vout_wallet['amount'])
+        if 'inputs' in tx:
+            for txi in tx['inputs']:
+                inspect_traced_frozen_tx(txi)
 
-                if output_amount < 0:
-                    continue
+    if isinstance(input_json, dict):
+        # Output from: debugwallet "{\"trace_frozen_outputs\":true}"
+        for tx in input_json['transactions']:
+            inspect_traced_frozen_tx(tx)
+    else:
+        # Output from filtertransactions
+        for r in input_json:
+            txid = r['txid']
+            txid_set.add(txid)
 
-                if vout_wallet['vout'] == 65535:
-                    print('reconstructed')  # Should only happen when output_amount > 0
-                pubkey = tx['vout'][vout_wallet['vout']]['pubkey']
+            tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txid, True])
 
-                ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [pubkey, ])
-                ao_index = ao['index']
+            if 'anon_inputs' in r:
+                for ai in r['anon_inputs']:
+                    prevtx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [ai['txid'], True])
+                    ao_pk = prevtx['vout'][ai['n']]['pubkey']
+                    ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [ao_pk, ])
+                    ao_index = ao['index']
+                    anon_spends.append((ao_index, 'S', prevtx['height'], ai['txid']))
 
-                print('%d,%s,%d,%s' % (ao_index, pubkey, output_amount, vout_wallet.get('blindingfactor', 'NONE')))
+            for vout_wallet in r['outputs']:
+                if vout_wallet['type'] == 'anon':
+                    num_anon_outputs += 1
+                    output_amount = make_int(vout_wallet['amount'])
+
+                    if output_amount < 0:
+                        continue
+
+                    if vout_wallet['vout'] == 65535:
+                        print('reconstructed')  # Should only happen when output_amount > 0
+                    pubkey = tx['vout'][vout_wallet['vout']]['pubkey']
+
+                    ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [pubkey, ])
+                    ao_index = ao['index']
+
+                    print('%d,%s,%d,%s' % (ao_index, pubkey, output_amount, vout_wallet.get('blindingfactor', 'NONE')))
+                elif vout_wallet['type'] == 'blind':
+                    if 'blindingfactor' not in vout_wallet:
+                        continue
+                    output_amount = make_int(vout_wallet['amount'])
+                    blindingfactor = vout_wallet['blindingfactor']
+                    n = vout_wallet['vout']
+                    ct_values.append((txid, n, output_amount, blindingfactor))
 
     print('\nTransaction ids:')
     for txid in txid_set:
@@ -83,6 +119,10 @@ def main():
     print('\nSpends:')
     for spent_ao in anon_spends:
         print(','.join(str(x) for x in spent_ao))
+
+    print('\nCT values:')
+    for ctv in ct_values:
+        print(','.join(str(x) for x in ctv))
 
 
 if __name__ == '__main__':
