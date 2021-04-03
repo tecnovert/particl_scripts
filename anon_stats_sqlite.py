@@ -627,6 +627,8 @@ def main():
     duplicate_aov = 0
     duplicate_aos = 0
     duplicate_ctov = 0
+    zero_value_aos = 0
+    zero_value_ctos = 0
     if 'knowninfodir' in settings:
         knowninfodir = settings['knowninfodir']
         files = os.listdir(knowninfodir)
@@ -671,6 +673,8 @@ def main():
                                 duplicate_ctov += 1
                                 continue
                             chain_stats.value_ctos[Prevout(txid, vout)] = ctv
+                            if ctv == 0:
+                                zero_value_ctos += 1
 
                             source_tx = chain_stats.callrpc('getrawtransaction', [txid, True])
                             value_commitment = source_tx['vout'][vout]['valueCommitment']
@@ -686,16 +690,13 @@ def main():
                         aov = int(split[2])
                         known_aos[aoi] = aov
 
-                        if aoi in chain_stats.value_aos:
-                            #logging.info('Duplicate aov: {}'.format(aoi))
-                            duplicate_aov += 1
-                            continue
-                        chain_stats.value_aos[aoi] = AnonOutValue(aov, True)
-
-                        if len(split) > 3:
+                        if len(split) == 3:
+                            pass
+                            logging.info('Warning value_aos with missing blinding factor from: {}'.format(f))
+                            #logging.info('Skipping value_aos with missing blinding factor from: {}'.format(f))
+                            #continue
+                        else:
                             # Verify commitment
-                            # TODO: Accept only verified outputs
-
                             ao_rv = chain_stats.callrpc('anonoutput', [str(aoi)])
                             txid = ao_rv['txnhash']
                             vout = int(ao_rv['n'])
@@ -705,16 +706,27 @@ def main():
                             verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(aov)])
                             assert(verify_rv['result'] is True)
 
+                        if aoi in chain_stats.value_aos:
+                            #logging.info('Duplicate aov: {}'.format(aoi))
+                            duplicate_aov += 1
+                            continue
+                        chain_stats.value_aos[aoi] = AnonOutValue(aov, True)
+                        if aov == 0:
+                            zero_value_aos += 1
+
             if len(known_txids) > 0 or len(known_aos) > 0:
                 chain_stats.known_wallets[f] = {'txids': known_txids, 'aos': known_aos}
 
-    logging.info('value_aos     {}'.format(len(chain_stats.value_aos)))
-    logging.info('spent_aos     {}'.format(len(chain_stats.spent_aos)))
-    logging.info('value_ctos    {}'.format(len(chain_stats.value_ctos)))
+    logging.info('value_aos             {}'.format(len(chain_stats.value_aos)))
+    logging.info('spent_aos             {}'.format(len(chain_stats.spent_aos)))
+    logging.info('value_ctos            {}'.format(len(chain_stats.value_ctos)))
 
-    logging.info('duplicate value_aos     {}'.format(duplicate_aov))
-    logging.info('duplicate spent_aos     {}'.format(duplicate_aos))
-    logging.info('duplicate value_ctos    {}'.format(duplicate_ctov))
+    logging.info('duplicate value_aos   {}'.format(duplicate_aov))
+    logging.info('duplicate spent_aos   {}'.format(duplicate_aos))
+    logging.info('duplicate value_ctos  {}'.format(duplicate_ctov))
+
+    logging.info('zero_value_aos        {}'.format(zero_value_aos))
+    logging.info('zero_value_ctos       {}'.format(zero_value_ctos))
 
     try:
         r = chain_stats.callrpc('getblockchaininfo')
@@ -727,6 +739,14 @@ def main():
     logging.info('num_anon_txns     {}'.format(chain_stats.num_anon_txns))
     logging.info('num_anon_outputs  {}'.format(chain_stats.num_anon_outputs))
     logging.info('num_mlsag_rows    {}'.format(chain_stats.num_mlsag_rows))
+
+    # Compile blacklisted anon outputs
+    q = chain_stats.db_cursor.execute('''SELECT anon_index FROM outputs, transactions
+                                         WHERE outputs.txid = transactions.txid AND transactions.bad_tx = 1''')
+
+    logging.info('Blacklisted anon indices:')
+    for row in q:
+        logging.info('{}'.format(row[0]))
 
     print('Done.')
 

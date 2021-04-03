@@ -30,7 +30,7 @@ from util import callrpc, make_int, format8, b58decode
 from ecc_util import hashToCurve, pointToCPK, G, b2i, b2h
 
 
-spent_ai_file = os.path.expanduser(os.getenv('SPENT_ANON_INPUTS_FILE', '~/trace_frozen_spent_inputs.json'))
+persistent_data_file = os.path.expanduser(os.getenv('PERSISTENT_DATA_FILE', '~/trace_frozen_data.json'))
 
 
 def fromWIF(x):
@@ -59,13 +59,17 @@ def main():
     r = callrpc(rpc_port, rpc_auth, 'getnetworkinfo')
     print('Core version', r['version'])
     print('Use anon spend keys', use_anon_spend_keys)
-    print('Spent anon indices path', spent_ai_file)
+    print('Persistent data path', persistent_data_file)
 
     spent_anon_inputs = {}
-    if os.path.exists(spent_ai_file):
-        with open(spent_ai_file) as fp:
-            spent_anon_inputs = json.load(fp)
+    blacklisted_anon_outputs = []
+    if os.path.exists(persistent_data_file):
+        with open(persistent_data_file) as fp:
+            json_data = json.load(fp)
+            spent_anon_inputs = json_data['spent_anon_inputs']
+            blacklisted_aos = json_data['blacklisted_aos']
     print('Spent anon indices', len(spent_anon_inputs))
+    print('Blacklisted anon outputs', len(blacklisted_aos))
 
     with open(input_file) as fp:
         input_json = json.load(fp)
@@ -97,6 +101,13 @@ def main():
                     assert(rv['result'] is True)
                     total_out += txo_verify['value']
                     found_vout = True
+
+                    if txo_type == 'anon':
+                        anon_index = txo_verify['anon_index']
+                        if anon_index in blacklisted_aos:
+                            warning = 'Warning: Blacklisted anon output: {}.'.format(anon_index)
+                            print(warning)
+                            issues.append(warning)
 
                     if spending_txid is not None and 'spent_by' in txo_verify and spending_txid == txo_verify['spent_by']:
                         spent_out += txo_verify['value']
@@ -197,8 +208,10 @@ def main():
     print('Unproven txids:')
     print('\n'.join(txids_check_further))
 
-    with open(spent_ai_file, 'w') as fp:
-        json.dump(spent_anon_inputs, fp, indent=4)
+    with open(persistent_data_file, 'w') as fp:
+        json_data = {'spent_anon_inputs': spent_anon_inputs,
+                     'blacklisted_aos': blacklisted_aos}
+        json.dump(json_data, fp, indent=4)
 
     print('Done.')
 

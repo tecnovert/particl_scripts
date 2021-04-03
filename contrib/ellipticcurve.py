@@ -195,11 +195,10 @@ class CurveFp(object):
         return (y * y - (x * x * x + self.__a * x + self.__b)) % self.__p == 0
 
 
-
 class Point(object):
     """ A point on an elliptic curve. Altering x and y is forbidding,
         but they can be read by the x() and y() methods."""
-    def __init__(self, curve, x, y, order = None):
+    def __init__(self, curve, x, y, order=None):
         """curve, x, y, order; order (optional) is the order of this point."""
         self.__curve = curve
         self.__x = x
@@ -326,8 +325,10 @@ class Point(object):
 # This one point is the Point At Infinity for all purposes:
 INFINITY = Point(None, None, None)
 
+
 def __main__():
     class FailedTest(Exception): pass
+
     def test_add(c, x1, y1, x2, y2, x3, y3):
         """We expect that on curve c, (x1,y1) + (x2, y2) = (x3, y3)."""
         p1 = Point(c, x1, y1)
