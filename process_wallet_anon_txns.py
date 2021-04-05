@@ -9,6 +9,7 @@
 
 ~/tmp/particl-0.19.2.5/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 ./particl-cli -rpcwallet=wallet.dat filtertransactions "{\"type\":\"anon\",\"count\":0,\"show_blinding_factors\":true,\"show_anon_spends\":true,\"show_change\":true}"  > ~/anons_wallet1.txt
+./particl-cli -rpcwallet=wallet.dat filtertransactions "{\"type\":\"blind\",\"count\":0,\"show_blinding_factors\":true,\"show_anon_spends\":true,\"show_change\":true}"  > ~/blinds_wallet1.txt
 $ python process_wallet_anon_txns.py ~/.particl ~/anons_wallet1.txt > ~/anon1.txt
 
 """
@@ -78,7 +79,12 @@ def main():
             txid = r['txid']
             txid_set.add(txid)
 
-            tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txid, True])
+            try:
+                tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txid, True])
+            except Exception as e:
+                # No such mempool or blockchain transaction.
+                print('Error: getrawtransaction:', txid, str(e), file=sys.stderr)
+                continue
 
             if 'anon_inputs' in r:
                 for ai in r['anon_inputs']:
