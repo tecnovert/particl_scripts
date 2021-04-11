@@ -44,7 +44,7 @@ def main():
 
     num_anon_outputs = 0
     txid_set = set()
-    anon_spends = []
+    anon_spends = {}
     ct_values = []
 
     def inspect_traced_frozen_tx(tx):
@@ -60,7 +60,7 @@ def main():
 
                 if 'spent_by' in output:
                     spendtx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [output['spent_by'], True])
-                    anon_spends.append((ao_index, 'S', spendtx['height'], output['spent_by']))
+                    anon_spends[ao_index] = (spendtx['height'], output['spent_by'])
 
             elif output['type'] == 'blind':
                 ct_values.append((tx['txid'], n, output_amount, blindingfactor))
@@ -92,9 +92,12 @@ def main():
                     ao_pk = prevtx['vout'][ai['n']]['pubkey']
                     ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [ao_pk, ])
                     ao_index = ao['index']
-                    anon_spends.append((ao_index, 'S', prevtx['height'], ai['txid']))
+                    anon_spends[ao_index] = (tx['height'], txid)
 
             for vout_wallet in r['outputs']:
+                if 'type' not in vout_wallet:
+                    # standard tx
+                    continue
                 if vout_wallet['type'] == 'anon':
                     num_anon_outputs += 1
                     output_amount = make_int(vout_wallet['amount'])
@@ -123,8 +126,8 @@ def main():
         print(txid)
 
     print('\nSpends:')
-    for spent_ao in anon_spends:
-        print(','.join(str(x) for x in spent_ao))
+    for aoi, spent_info in anon_spends.items():
+        print('{},S,{},{}'.format(aoi, spent_info[0], spent_info[1]))
 
     print('\nCT values:')
     for ctv in ct_values:

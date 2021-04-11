@@ -386,6 +386,7 @@ class ChainTracker():
                 try:
                     for inp in rsi:
                         ringmember_rows = []
+                        clear_columns = []
                         sum_column_vals = [0] * inp[1]
                         for row in inp[2]:
                             new_row = []
@@ -398,8 +399,14 @@ class ChainTracker():
                                 if value_obj.known or source_tx not in used_anon_outs_from_txs:
                                     used_anon_outs_from_txs.add(source_tx)
 
-                                    if ai not in self.spent_aos or self.spent_aos[ai].spent_height >= height:
+                                    if ai not in self.spent_aos or self.spent_aos[ai].spent_height == height:
                                         sum_column_vals[column] += value_obj.amount
+                                    else:
+                                        # Found an input spent in a different tx, clear the whole column (for multi-row inputs)
+                                        clear_columns.append(column)
+
+                        for c in clear_columns:
+                            sum_column_vals[c] = 0
                         #print('sum_column_vals', sum_column_vals)
                         max_anon_in_value_possible += max(sum_column_vals)
                 except Exception as e:
@@ -741,12 +748,12 @@ def main():
     logging.info('num_mlsag_rows    {}'.format(chain_stats.num_mlsag_rows))
 
     # Compile blacklisted anon outputs
-    q = chain_stats.db_cursor.execute('''SELECT anon_index FROM outputs, transactions
+    q = chain_stats.db_cursor.execute('''SELECT outputs.anon_index, outputs.txid FROM outputs, transactions
                                          WHERE outputs.txid = transactions.txid AND transactions.bad_tx = 1''')
 
     logging.info('Blacklisted anon indices:')
     for row in q:
-        logging.info('{}'.format(row[0]))
+        logging.info('{}, {}'.format(row[0], row[1]))
 
     print('Done.')
 
