@@ -171,8 +171,12 @@ def main():
                 else:
                     prev_tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txin['txid'], True])
                     prevout = prev_tx['vout'][txin['vout']]
-                    assert(prevout['type'] == 'standard')
-                    total_in += prevout['valueSat']
+                    if prevout['type'] != 'standard':
+                        warning = 'Warning: Missing blinded inputs for tx {}.'.format(txid)
+                        print(warning)
+                        issues.append(warning)
+                    else:
+                        total_in += prevout['valueSat']
 
         print('txid', txid)
         if spending_txid is not None:
