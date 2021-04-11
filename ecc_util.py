@@ -34,10 +34,6 @@ G = Point(curve_secp256k1, ep.Gx, ep.Gy, ep.o)
 SECP256K1_ORDER_HALF = ep.o // 2
 
 
-def ToDER(P):
-    return bytes((4, )) + int(P.x()).to_bytes(32, byteorder='big') + int(P.y()).to_bytes(32, byteorder='big')
-
-
 def bytes32ToInt(b):
     return int.from_bytes(b, byteorder='big')
 
@@ -87,6 +83,10 @@ def getInsecureInt():
             return s_test
 
 
+def validKey(i):
+    return(i < ep.o and i > 0)
+
+
 def powMod(x, y, z):
     # Calculate (x ** y) % z efficiently.
     number = 1
@@ -99,14 +99,8 @@ def powMod(x, y, z):
     return number
 
 
-def ExpandPoint(xb, sign):
-    x = int.from_bytes(xb, byteorder='big')
-    a = (powMod(x, 3, ep.p) + 7) % ep.p
-    y = powMod(a, (ep.p + 1) // 4, ep.p)
-
-    if sign:
-        y = ep.p - y
-    return Point(curve_secp256k1, x, y, ep.o)
+def ToDER(P):
+    return bytes((4, )) + int(P.x()).to_bytes(32, byteorder='big') + int(P.y()).to_bytes(32, byteorder='big')
 
 
 def CPKToPoint(cpk):
@@ -136,25 +130,6 @@ def pointToCPK(point):
     return cpk
 
 
-def secretToCPK(secret):
-    secretInt = secret if isinstance(secret, int) \
-        else int.from_bytes(secret, byteorder='big')
-
-    R = G * secretInt
-
-    Y = R.y().to_bytes(32, byteorder='big')
-    ind = bytes((0x03,)) if Y[31] % 2 else bytes((0x02,))
-
-    pubkey = ind + R.x().to_bytes(32, byteorder='big')
-
-    return pubkey
-
-
-def getKeypair():
-    secretBytes = getSecretBytes()
-    return secretBytes, secretToCPK(secretBytes)
-
-
 def hashToCurve(pubkey):
     xBytes = hashlib.sha256(pubkey).digest()
     x = int.from_bytes(xBytes, byteorder='big')
@@ -172,13 +147,8 @@ def hashToCurve(pubkey):
         except Exception:
             xBytes = hashlib.sha256(xBytes).digest()
             x = int.from_bytes(xBytes, byteorder='big')
-            pass
 
     raise ValueError('hashToCurve failed for 100 tries')
-
-
-def hash256(inb):
-    return hashlib.sha256(inb).digest()
 
 
 i2b = intToBytes32
@@ -215,5 +185,5 @@ def testEccUtils():
     print('Passed.')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     testEccUtils()
