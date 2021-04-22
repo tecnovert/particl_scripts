@@ -7,7 +7,7 @@
 
 """
 
-~/tmp/particl-0.19.2.5/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.6/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 
 rm -r /tmp/anon_stats || true
 mkdir -p /tmp/anon_stats
@@ -75,7 +75,7 @@ class SpentAnonOut:
     __slots__ = ('spent_type', 'spent_height', 'txid')
 
     def __init__(self, spent_type, spent_height, txid):
-        self.spent_type = spent_type  # S for spent, 0 for a 0 output
+        self.spent_type = spent_type  # S for spent, 0 for a 0 output, SA for assumed spent
         self.spent_height = spent_height
         self.txid = txid
 
@@ -118,6 +118,7 @@ class ChainTracker():
         self.value_ctos = {}
         self.value_aos = {}
         self.spent_aos = {}
+        self.unspent_aos = set()  # Outputs that are unspent at HF1 time
         self.source_aos = {}  # key anon_index, value source txid
         self.known_wallets = {}
         self.num_anon_txns = 0
@@ -177,7 +178,7 @@ class ChainTracker():
                       blind_added INTEGER, blind_removed INTEGER, max_possible_blind_in INTEGER, bad_tx INTEGER)''')
 
         c.execute('''CREATE TABLE outputs
-                     (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_height INTEGER, spent_txid TEXT, has_anon_ancestor INTEGER)''')
+                     (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_height INTEGER, spent_txid TEXT, is_spent_estimate INTEGER, has_anon_ancestor INTEGER)''')
 
         c.execute('''CREATE TABLE anon_inputs
                      (txid TEXT, n INTEGER, inputs INTEGER, ring_size INTEGER, prevouts TEXT)''')
@@ -385,28 +386,53 @@ class ChainTracker():
             if len(rsi) > 0:
                 try:
                     for inp in rsi:
+                        cols = inp[1]
                         ringmember_rows = []
-                        clear_columns = []
-                        sum_column_vals = [0] * inp[1]
+                        clear_columns = set()
+                        sum_column_vals = [0] * cols
+                        ai_matrix = []
                         for row in inp[2]:
-                            new_row = []
+                            ai_row = []
                             ais = row.split(',')
                             for column, anon_index in enumerate(ais):
                                 ai = int(anon_index.strip())
+                                ai_row.append(ai)
                                 source_tx = self.source_aos[ai]
                                 value_obj = chain_stats.value_aos[ai]
                                 # TODO: needs adjustment for multi row anoninputs
                                 if value_obj.known or source_tx not in used_anon_outs_from_txs:
                                     used_anon_outs_from_txs.add(source_tx)
 
-                                    if ai not in self.spent_aos or self.spent_aos[ai].spent_height == height:
+                                    if ai not in self.unspent_aos and (ai not in self.spent_aos or self.spent_aos[ai].txid == tx['txid']):
                                         sum_column_vals[column] += value_obj.amount
                                     else:
-                                        # Found an input spent in a different tx, clear the whole column (for multi-row inputs)
-                                        clear_columns.append(column)
+                                        # Clear the whole column (for multi-row inputs), found
+                                        # an input spent in a different tx, or
+                                        # a known unspent input
+                                        clear_columns.add(column)
+                            ai_matrix.append(ai_row)
 
                         for c in clear_columns:
                             sum_column_vals[c] = 0
+
+                        if len(clear_columns) >= cols - 1:
+                            print('Only one possible column, assume spent', len(clear_columns), cols, clear_columns)
+                            # Only one possible column, assume spent
+                            for ai_row in ai_matrix:
+                                for column, ai in enumerate(ai_row):
+                                    if column in clear_columns:
+                                        continue
+                                    if ai in self.unspent_aos:
+                                        print('Error: assuming known unspent is spent', ai, tx['txid'])
+                                    elif ai in self.spent_aos:
+                                        if self.spent_aos[ai].txid != tx['txid']:
+                                            print('Error: assuming double-spend', ai, self.spent_aos[ai].txid, tx['txid'])
+                                    else:
+                                        self.spent_aos[ai] = SpentAnonOut('SA', height, tx['txid'])
+                                        print('Adding spent ao', ai, tx['txid'])
+                                        self.db_cursor.execute('UPDATE outputs SET spent_txid = ?, is_spent_estimate = 1 WHERE anon_index = ?',
+                                                               (tx['txid'], ai))
+
                         #print('sum_column_vals', sum_column_vals)
                         max_anon_in_value_possible += max(sum_column_vals)
                 except Exception as e:
@@ -437,10 +463,10 @@ class ChainTracker():
 
             bad_tx = False
             if max_possible_blinded_value_in < blind_removed:
-                print('max_possible_blinded_value_in < blind_removed', tx['txid'])
+                print('max_possible_blinded_value_in < blind_removed', tx['txid'], max_possible_blinded_value_in, blind_removed)
                 bad_tx = True
             if max_anon_in_value_possible < anon_removed:
-                print('max_anon_in_value_possible < anon_removed', tx['txid'])
+                print('max_anon_in_value_possible < anon_removed', tx['txid'], max_anon_in_value_possible, anon_removed)
                 bad_tx = True
 
             if num_blinded_in > 0 or num_blinded_out > 0 or num_anon_in > 0 or num_anon_out > 0:
@@ -633,6 +659,7 @@ def main():
 
     duplicate_aov = 0
     duplicate_aos = 0
+    duplicate_aous = 0
     duplicate_ctov = 0
     zero_value_aos = 0
     zero_value_ctos = 0
@@ -658,6 +685,14 @@ def main():
                         ctv_section = True
                         spend_section = False
                         continue
+                    if line == 'Anon values:':
+                        ctv_section = False
+                        spend_section = False
+                        continue
+                    if line == 'Transaction ids:':
+                        ctv_section = False
+                        spend_section = False
+                        continue
                     split = line.split(',')
 
                     if f == 'spent.txt' or spend_section is True:
@@ -668,6 +703,16 @@ def main():
                                 duplicate_aos += 1
                                 continue
                             chain_stats.spent_aos[aoi] = SpentAnonOut(split[1], int(split[2]), split[3])
+                        elif len(split) == 2:
+                            aoi = int(split[0])
+                            if split[1] != 'U':
+                                logging.info('Warning unknown unspent aos format: {}'.format(line))
+                                continue
+                            if aoi in chain_stats.unspent_aos:
+                                #logging.info('Duplicate aos: {}'.format(aoi))
+                                duplicate_aous += 1
+                                continue
+                            chain_stats.unspent_aos.add(aoi)
                         continue
 
                     if ctv_section is True:
@@ -710,8 +755,11 @@ def main():
                             source_tx = chain_stats.callrpc('getrawtransaction', [txid, True])
 
                             value_commitment = source_tx['vout'][vout]['valueCommitment']
-                            verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(aov)])
-                            assert(verify_rv['result'] is True)
+                            if split[3] == '0000000000000000000000000000000000000000000000000000000000000000':
+                                logging.info('Warning value_aos with null blinding factor from: {}'.format(f))
+                            else:
+                                verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(aov)])
+                                assert(verify_rv['result'] is True)
 
                         if aoi in chain_stats.value_aos:
                             #logging.info('Duplicate aov: {}'.format(aoi))
@@ -726,6 +774,7 @@ def main():
 
     logging.info('value_aos             {}'.format(len(chain_stats.value_aos)))
     logging.info('spent_aos             {}'.format(len(chain_stats.spent_aos)))
+    logging.info('unspent_aos           {}'.format(len(chain_stats.unspent_aos)))
     logging.info('value_ctos            {}'.format(len(chain_stats.value_ctos)))
 
     logging.info('duplicate value_aos   {}'.format(duplicate_aov))

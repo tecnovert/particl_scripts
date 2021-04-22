@@ -7,7 +7,7 @@
 
 """
 
-~/tmp/particl-0.19.2.5/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.6/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 ./particl-cli -rpcwallet=wallet.dat filtertransactions "{\"type\":\"anon\",\"count\":0,\"show_blinding_factors\":true,\"show_anon_spends\":true,\"show_change\":true}"  > ~/anons_wallet1.txt
 ./particl-cli -rpcwallet=wallet.dat filtertransactions "{\"type\":\"blind\",\"count\":0,\"show_blinding_factors\":true,\"show_anon_spends\":true,\"show_change\":true}"  > ~/blinds_wallet1.txt
 $ python process_wallet_anon_txns.py ~/.particl ~/anons_wallet1.txt > ~/anon1.txt
@@ -39,8 +39,25 @@ def main():
     r = callrpc(rpc_port, rpc_auth, 'getnetworkinfo')
     print('version', r['version'])
 
+    json_objs = []
     with open(input_file) as fp:
-        input_json = json.load(fp)
+        end_char = None
+        json_txt = ''
+        for line in fp:
+            sline = line.rstrip()
+            if end_char is None:
+                if sline == '[':
+                    end_char = ']'
+                elif sline == '{':
+                    end_char = '}'
+
+            if end_char is not None:
+                json_txt += line
+
+                if sline == end_char:
+                    json_objs.append(json.loads(json_txt))
+                    json_txt = ''
+                    end_char = None
 
     num_anon_outputs = 0
     txid_set = set()
@@ -66,60 +83,75 @@ def main():
                 ct_values.append((tx['txid'], n, output_amount, blindingfactor))
 
         if 'inputs' in tx:
+            print('Anon values:')
             for txi in tx['inputs']:
                 inspect_traced_frozen_tx(txi)
 
-    if isinstance(input_json, dict):
-        # Output from: debugwallet "{\"trace_frozen_outputs\":true}"
-        for tx in input_json['transactions']:
-            inspect_traced_frozen_tx(tx)
-    else:
-        # Output from filtertransactions
-        for r in input_json:
-            txid = r['txid']
-            txid_set.add(txid)
+    for input_json in json_objs:
+        if isinstance(input_json, dict):
+            if 'frozen_outputs' in input_json:
+                # Output from: debugwallet "{\"trace_frozen_outputs\":true}"
+                print('\nSpends:')
+                for tx in input_json['frozen_outputs']:
+                    if 'anon_index' in tx:
+                        print('{},U'.format(tx['anon_index']))
+                    elif tx['type'] == 'anon':
+                        tx_in_chain = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [tx['txid'], True])
+                        ao_pk = tx_in_chain['vout'][tx['n']]['pubkey']
+                        ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [ao_pk, ])
+                        print('{},U'.format(ao['index']))
+            else:
+                # Output from: debugwallet "{\"trace_frozen_outputs\":true}"
+                for tx in input_json['transactions']:
+                    inspect_traced_frozen_tx(tx)
+        else:
+            # Output from filtertransactions
+            print('Anon values:')
+            for r in input_json:
+                txid = r['txid']
+                txid_set.add(txid)
 
-            try:
-                tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txid, True])
-            except Exception as e:
-                # No such mempool or blockchain transaction.
-                print('Error: getrawtransaction:', txid, str(e), file=sys.stderr)
-                continue
-
-            if 'anon_inputs' in r:
-                for ai in r['anon_inputs']:
-                    prevtx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [ai['txid'], True])
-                    ao_pk = prevtx['vout'][ai['n']]['pubkey']
-                    ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [ao_pk, ])
-                    ao_index = ao['index']
-                    anon_spends[ao_index] = (tx['height'], txid)
-
-            for vout_wallet in r['outputs']:
-                if 'type' not in vout_wallet:
-                    # standard tx
+                try:
+                    tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txid, True])
+                except Exception as e:
+                    # No such mempool or blockchain transaction.
+                    print('Error: getrawtransaction:', txid, str(e), file=sys.stderr)
                     continue
-                if vout_wallet['type'] == 'anon':
-                    num_anon_outputs += 1
-                    output_amount = make_int(vout_wallet['amount'])
 
-                    if output_amount < 0:
+                if 'anon_inputs' in r:
+                    for ai in r['anon_inputs']:
+                        prevtx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [ai['txid'], True])
+                        ao_pk = prevtx['vout'][ai['n']]['pubkey']
+                        ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [ao_pk, ])
+                        ao_index = ao['index']
+                        anon_spends[ao_index] = (tx['height'], txid)
+
+                for vout_wallet in r['outputs']:
+                    if 'type' not in vout_wallet:
+                        # standard tx
                         continue
+                    if vout_wallet['type'] == 'anon':
+                        num_anon_outputs += 1
+                        output_amount = make_int(vout_wallet['amount'])
 
-                    if vout_wallet['vout'] == 65535:
-                        print('reconstructed')  # Should only happen when output_amount > 0
-                    pubkey = tx['vout'][vout_wallet['vout']]['pubkey']
+                        if output_amount < 0:
+                            continue
 
-                    ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [pubkey, ])
-                    ao_index = ao['index']
+                        if vout_wallet['vout'] == 65535:
+                            print('reconstructed')  # Should only happen when output_amount > 0
+                        pubkey = tx['vout'][vout_wallet['vout']]['pubkey']
 
-                    print('%d,%s,%d,%s' % (ao_index, pubkey, output_amount, vout_wallet.get('blindingfactor', 'NONE')))
-                elif vout_wallet['type'] == 'blind':
-                    if 'blindingfactor' not in vout_wallet:
-                        continue
-                    output_amount = make_int(vout_wallet['amount'])
-                    blindingfactor = vout_wallet['blindingfactor']
-                    n = vout_wallet['vout']
-                    ct_values.append((txid, n, output_amount, blindingfactor))
+                        ao = callrpc(rpc_port, rpc_auth, 'anonoutput', [pubkey, ])
+                        ao_index = ao['index']
+
+                        print('%d,%s,%d,%s' % (ao_index, pubkey, output_amount, vout_wallet.get('blindingfactor', 'NONE')))
+                    elif vout_wallet['type'] == 'blind':
+                        if 'blindingfactor' not in vout_wallet:
+                            continue
+                        output_amount = make_int(vout_wallet['amount'])
+                        blindingfactor = vout_wallet['blindingfactor']
+                        n = vout_wallet['vout']
+                        ct_values.append((txid, n, output_amount, blindingfactor))
 
     print('\nTransaction ids:')
     for txid in txid_set:
