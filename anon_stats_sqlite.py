@@ -7,7 +7,7 @@
 
 """
 
-~/tmp/particl-0.19.2.6/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.8/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 
 rm -r /tmp/anon_stats || true
 mkdir -p /tmp/anon_stats
@@ -15,7 +15,7 @@ python anon_stats_sqlite.py -outputdir=/tmp/anon_stats -knowninfodir=~/known_wal
 
 """
 
-__version__ = '0.2'
+__version__ = '0.3'
 
 import os
 import sys
@@ -178,7 +178,7 @@ class ChainTracker():
                       blind_added INTEGER, blind_removed INTEGER, max_possible_blind_in INTEGER, bad_tx INTEGER)''')
 
         c.execute('''CREATE TABLE outputs
-                     (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_height INTEGER, spent_txid TEXT, is_spent_estimate INTEGER, has_anon_ancestor INTEGER)''')
+                     (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_txid TEXT, is_spent_estimate INTEGER, has_anon_ancestor INTEGER)''')
 
         c.execute('''CREATE TABLE anon_inputs
                      (txid TEXT, n INTEGER, inputs INTEGER, ring_size INTEGER, prevouts TEXT)''')
@@ -310,12 +310,12 @@ class ChainTracker():
                     pubkey = tx_out['pubkey']
 
                     ao = self.callrpc('anonoutput', [pubkey])
-                    new_anon_outputs.append((int(ao['index']), Prevout(tx['txid'], tx_out['n'])))
-                    self.source_aos[int(ao['index'])] = tx['txid']
+                    new_anon_outputs.append((int(ao['index']), Prevout(txh, tx_out['n'])))
+                    self.source_aos[int(ao['index'])] = txh
 
                 if tx_out_type == 'blind':
                     num_blinded_out += 1
-                    new_blind_outputs.append(Prevout(tx['txid'], tx_out['n']))
+                    new_blind_outputs.append(Prevout(txh, tx_out['n']))
                 elif tx_out_type == 'standard':
                     total_plain_out += tx_out['valueSat']
 
@@ -403,7 +403,7 @@ class ChainTracker():
                                 if value_obj.known or source_tx not in used_anon_outs_from_txs:
                                     used_anon_outs_from_txs.add(source_tx)
 
-                                    if ai not in self.unspent_aos and (ai not in self.spent_aos or self.spent_aos[ai].txid == tx['txid']):
+                                    if ai not in self.unspent_aos and (ai not in self.spent_aos or self.spent_aos[ai].txid == txh):
                                         sum_column_vals[column] += value_obj.amount
                                     else:
                                         # Clear the whole column (for multi-row inputs), found
@@ -423,20 +423,20 @@ class ChainTracker():
                                     if column in clear_columns:
                                         continue
                                     if ai in self.unspent_aos:
-                                        print('Error: assuming known unspent is spent', ai, tx['txid'])
+                                        print('Error: assuming known unspent is spent', ai, txh)
                                     elif ai in self.spent_aos:
-                                        if self.spent_aos[ai].txid != tx['txid']:
-                                            print('Error: assuming double-spend', ai, self.spent_aos[ai].txid, tx['txid'])
+                                        if self.spent_aos[ai].txid != txh:
+                                            print('Error: assuming double-spend', ai, self.spent_aos[ai].txid, txh)
                                     else:
-                                        self.spent_aos[ai] = SpentAnonOut('SA', height, tx['txid'])
-                                        print('Adding spent ao', ai, tx['txid'])
+                                        self.spent_aos[ai] = SpentAnonOut('SA', height, txh)
+                                        print('Adding spent ao', ai, txh)
                                         self.db_cursor.execute('UPDATE outputs SET spent_txid = ?, is_spent_estimate = 1 WHERE anon_index = ?',
-                                                               (tx['txid'], ai))
+                                                               (txh, ai))
 
                         #print('sum_column_vals', sum_column_vals)
                         max_anon_in_value_possible += max(sum_column_vals)
                 except Exception as e:
-                    print('Unable to estimate input value for', tx['txid'], str(e))
+                    print('Unable to estimate input value for', txh, str(e))
                 #print('max_anon_in_value_possible', max_anon_in_value_possible)
 
             for bo in new_blind_outputs:
@@ -463,10 +463,10 @@ class ChainTracker():
 
             bad_tx = False
             if max_possible_blinded_value_in < blind_removed:
-                print('max_possible_blinded_value_in < blind_removed', tx['txid'], max_possible_blinded_value_in, blind_removed)
+                print('max_possible_blinded_value_in < blind_removed', txh, max_possible_blinded_value_in, blind_removed)
                 bad_tx = True
             if max_anon_in_value_possible < anon_removed:
-                print('max_anon_in_value_possible < anon_removed', tx['txid'], max_anon_in_value_possible, anon_removed)
+                print('max_anon_in_value_possible < anon_removed', txh, max_anon_in_value_possible, anon_removed)
                 bad_tx = True
 
             if num_blinded_in > 0 or num_blinded_out > 0 or num_anon_in > 0 or num_anon_out > 0:
@@ -479,14 +479,14 @@ class ChainTracker():
                                           ?, ?, ?, ?,
                                           ?, ?, ?, ?,
                                           ?, ?, ?, ?)''',
-                                       (height, tx['txid'], tx_type, ct_fee,
+                                       (height, txh, tx_type, ct_fee,
                                         total_plain_in, total_plain_out, anon_added, anon_removed,
                                         blind_added, blind_removed, max_possible_blinded_value_in, 1 if bad_tx else 0))
 
                 with open(os.path.join(self.output_dir, 'chain_stats.csv'), 'a') as fp:
                     fp.write('%d,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n'
                              % (height,
-                                tx['txid'],
+                                txh,
                                 tx_type,
                                 ct_fee,
                                 num_anon_in,
@@ -510,7 +510,7 @@ class ChainTracker():
                     if num_anon_in > 0 or anon_removed > 0 or anon_added > 0:
                         self.num_anon_txns += 1
                         for wk, wd in self.known_wallets.items():
-                            if tx['txid'] in wd['txids']:
+                            if txh in wd['txids']:
                                 fp.write('known tx,%s\n' % (wk))
                                 break
 
@@ -724,14 +724,18 @@ def main():
                                 #logging.info('Duplicate ctv: {}, {}'.format(txid, vout))
                                 duplicate_ctov += 1
                                 continue
-                            chain_stats.value_ctos[Prevout(txid, vout)] = ctv
-                            if ctv == 0:
-                                zero_value_ctos += 1
 
                             source_tx = chain_stats.callrpc('getrawtransaction', [txid, True])
                             value_commitment = source_tx['vout'][vout]['valueCommitment']
-                            verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(ctv)])
+                            try:
+                                verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(ctv)])
+                            except Exception as e:
+                                print('verifycommitment failed', txid, vout, value_commitment, split[3], format8(ctv))
+                                continue
                             assert(verify_rv['result'] is True)
+                            chain_stats.value_ctos[Prevout(txid, vout)] = ctv
+                            if ctv == 0:
+                                zero_value_ctos += 1
                         continue
 
                     if len(line) == 64:
