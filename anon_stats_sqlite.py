@@ -15,7 +15,7 @@ python anon_stats_sqlite.py -outputdir=/tmp/anon_stats -knowninfodir=~/known_wal
 
 """
 
-__version__ = '0.3'
+__version__ = '0.4'
 
 import os
 import sys
@@ -37,6 +37,9 @@ DEBUG = True
 MAX_MONEY = 21000000 * COIN
 chain_stats = None
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(message)s')
+WITH_PLAIN_OUTPUTS = False
+
+marked_addresses = ['Pjc3TqX23Mb23iw8RS2YuXjNX5s8fgficZ']
 
 
 class AnonOutValue:
@@ -178,7 +181,7 @@ class ChainTracker():
                       blind_added INTEGER, blind_removed INTEGER, max_possible_blind_in INTEGER, bad_tx INTEGER)''')
 
         c.execute('''CREATE TABLE outputs
-                     (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_txid TEXT, is_spent_estimate INTEGER, has_anon_ancestor INTEGER)''')
+                     (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_txid TEXT, is_spent_estimate INTEGER, has_anon_ancestor INTEGER, script TEXT, script_type TEXT, address TEXT, marked INTEGER)''')
 
         c.execute('''CREATE TABLE anon_inputs
                      (txid TEXT, n INTEGER, inputs INTEGER, ring_size INTEGER, prevouts TEXT)''')
@@ -252,19 +255,19 @@ class ChainTracker():
             total_plain_out = 0
 
             has_tainted_blinded_input = False
+            mark_anon_outputs = False
 
             tx_type = 'p->p'
             rsi = []
             new_anon_outputs = []
-            new_blind_outputs = []
+            new_blind_outputs = {}
             max_possible_blinded_value_in = 0  # TODO: reduce max when multiple blind inputs have the same txid and spend all outputs from there
             for txi_n, tx_input in enumerate(tx['vin']):
                 #print('tx_input', json.dumps(tx_input, indent=4))
                 if 'coinbase' in tx_input:
                     continue
-                if 'txid' in tx_input and tx_input['txid'] == '0000000000000000000000000000000000000000000000000000000000000000':
-                    continue  # Coinbase
-
+                #if 'txid' in tx_input and tx_input['txid'] == '0000000000000000000000000000000000000000000000000000000000000000':
+                #    continue  # Coinbase
                 if 'type' in tx_input and tx_input['type'] == 'anon':
                     num_anon_in += 1
 
@@ -278,7 +281,6 @@ class ChainTracker():
 
                     self.db_cursor.execute('INSERT INTO anon_inputs (txid, n, inputs, ring_size, prevouts)  VALUES (?, ?, ?, ?, ?)',
                                            (txh, txi_n, tx_input['num_inputs'], tx_input['ring_size'], '\n'.join(ring_members)))
-
                     continue
 
                 prev_tx = self.callrpc('getrawtransaction', [tx_input['txid'], True])
@@ -301,6 +303,9 @@ class ChainTracker():
 
                 elif prevout_type == 'standard':
                     total_plain_in += prevout['valueSat']
+                    if WITH_PLAIN_OUTPUTS:
+                        self.db_cursor.execute('UPDATE outputs SET spent_txid = ? WHERE txid = ? AND n = ?',
+                                               (txh, tx_input['txid'], tx_input['vout']))
 
             for tx_out in tx['vout']:
                 #print(tx_out)
@@ -312,12 +317,18 @@ class ChainTracker():
                     ao = self.callrpc('anonoutput', [pubkey])
                     new_anon_outputs.append((int(ao['index']), Prevout(txh, tx_out['n'])))
                     self.source_aos[int(ao['index'])] = txh
-
-                if tx_out_type == 'blind':
+                elif tx_out_type == 'blind':
                     num_blinded_out += 1
-                    new_blind_outputs.append(Prevout(txh, tx_out['n']))
+                    new_blind_outputs[Prevout(txh, tx_out['n'])] = (tx_out['scriptPubKey']['hex'], tx_out['scriptPubKey']['type'], ' '.join(tx_out['scriptPubKey']['addresses']))
                 elif tx_out_type == 'standard':
                     total_plain_out += tx_out['valueSat']
+                    for addr in tx_out['scriptPubKey']['addresses']:
+                        if addr in marked_addresses:
+                            mark_anon_outputs = True
+                    if WITH_PLAIN_OUTPUTS:
+                        self.db_cursor.execute('INSERT INTO outputs (txid, n, type, value, script, script_type, address)  VALUES (?, ?, ?, ?, ?, ?, ?)',
+                                               (txh, tx_out['n'], 'P', tx_out['valueSat'], tx_out['scriptPubKey']['hex'], tx_out['scriptPubKey']['type'], ' '.join(tx_out['scriptPubKey']['addresses'])))
+
 
             #print('total_plain_in', total_plain_in)
             #print('total_plain_out', total_plain_out)
@@ -439,7 +450,7 @@ class ChainTracker():
                     print('Unable to estimate input value for', txh, str(e))
                 #print('max_anon_in_value_possible', max_anon_in_value_possible)
 
-            for bo in new_blind_outputs:
+            for bo, bod in new_blind_outputs.items():
                 possible_value = 0
                 is_known = False
                 if bo in self.value_ctos:
@@ -458,8 +469,8 @@ class ChainTracker():
 
                 anon_tainted = 1 if num_anon_in > 0 or has_tainted_blinded_input else 0
                 self.ct_outputs[bo] = CTOutput(possible_value, is_known)
-                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, value, has_anon_ancestor, is_estimate)  VALUES (?, ?, ?, ?, ?, ?)',
-                                       (bo.txid, bo.n, 'B', possible_value, anon_tainted, 0 if is_known else 1))
+                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, value, has_anon_ancestor, is_estimate, script, script_type, address)  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                       (bo.txid, bo.n, 'B', possible_value, anon_tainted, 0 if is_known else 1, bod[0], bod[1], bod[2]))
 
             bad_tx = False
             if max_possible_blinded_value_in < blind_removed:
@@ -543,13 +554,11 @@ class ChainTracker():
                                 aov = self.value_aos[nao[0]]
                                 ao_max_val = aov.amount
                                 known = aov.known
-                                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, is_estimate, spent_txid)  VALUES (?, ?, ?, ?, ?, ?, ?)',
-                                                       (nao[1].txid, nao[1].n, 'A', nao[0], aov.amount, 0 if known else 1, spent_in_tx))
                             else:
                                 ao_max_val = max_value
                                 chain_stats.value_aos[nao[0]] = AnonOutValue(ao_max_val, False)
-                                self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, is_estimate, spent_txid)  VALUES (?, ?, ?, ?, ?, ?, ?)',
-                                                       (nao[1].txid, nao[1].n, 'A', nao[0], ao_max_val, 1, spent_in_tx))
+                            self.db_cursor.execute('INSERT INTO outputs (txid, n, type, anon_index, value, is_estimate, spent_txid, marked)  VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                                                   (nao[1].txid, nao[1].n, 'A', nao[0], ao_max_val, 0 if known else 1, spent_in_tx, 1 if mark_anon_outputs else 0))
 
                             display.append('{} [{}{}]'.format(nao[0], '' if known else '<', ao_max_val))
 
@@ -762,7 +771,11 @@ def main():
                             if split[3] == '0000000000000000000000000000000000000000000000000000000000000000':
                                 logging.info('Warning value_aos with null blinding factor from: {}'.format(f))
                             else:
-                                verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(aov)])
+                                try:
+                                    verify_rv = chain_stats.callrpc('verifycommitment', [value_commitment, split[3], format8(aov)])
+                                except Exception as e:
+                                    logging.info('verifycommitment failed {}, {}, {}'.format(value_commitment, split[3], format8(aov)))
+                                    raise(e)
                                 assert(verify_rv['result'] is True)
 
                         if aoi in chain_stats.value_aos:
