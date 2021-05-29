@@ -7,7 +7,7 @@
 
 """
 
-~/tmp/particl-0.19.2.5/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.11/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 ./particl-cli -rpcwallet=wallet.dat filtertransactions "{\"type\":\"anon\",\"count\":0,\"show_blinding_factors\":true,\"show_anon_spends\":true,\"show_change\":true}"  > ~/anons_wallet1.txt
 ./particl-cli -rpcwallet=wallet2.dat filtertransactions "{\"type\":\"anon\",\"count\":0,\"show_blinding_factors\":true,\"show_anon_spends\":true,\"show_change\":true}"  > ~/anons_wallet2.txt
 $ python find_external_sends.py ~/anons_wallet1.txt ~/anons_wallet2.txt

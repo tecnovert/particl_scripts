@@ -7,7 +7,7 @@
 
 """
 
-~/tmp/particl-0.19.2.8/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.11/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 
 rm -r /tmp/anon_stats || true
 mkdir -p /tmp/anon_stats

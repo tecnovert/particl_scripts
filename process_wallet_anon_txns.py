@@ -7,7 +7,7 @@
 
 """
 
-~/tmp/particl-0.19.2.8/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.11/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 ./particl-cli -rpcwallet=wallet.dat filtertransactions "{\"type\":\"anon\",\"count\":0,\"show_blinding_factors\":true,\"show_anon_spends\":true,\"show_change\":true}"  > ~/anons_wallet1.txt
 ./particl-cli -rpcwallet=wallet.dat filtertransactions "{\"type\":\"blind\",\"count\":0,\"show_blinding_factors\":true,\"show_anon_spends\":true,\"show_change\":true}"  > ~/blinds_wallet1.txt
 $ python process_wallet_anon_txns.py ~/.particl ~/anons_wallet1.txt > ~/anon1.txt

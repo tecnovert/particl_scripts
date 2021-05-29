@@ -7,7 +7,7 @@
 
 """
 
-~/tmp/particl-0.19.2.5/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.11/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 
 rm -r /tmp/ct_tainted || true
 mkdir -p /tmp/ct_tainted

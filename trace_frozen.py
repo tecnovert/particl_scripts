@@ -16,7 +16,7 @@ Verifies
    - Write to file to cache across all runs
  - Keyimages are not reused.
 
-~/tmp/particl-0.19.2.5/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.11/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 ./particl-cli -rpcwallet=wallet.dat debugwallet "{\"trace_frozen_outputs\":true}"  > ~/trace_wallets.txt
 $ python trace_frozen.py ~/.particl ~/trace_wallets.txt
 
@@ -29,8 +29,8 @@ import time
 from util import callrpc, make_int, format8, b58decode
 from ecc_util import hashToCurve, pointToCPK, G, b2i, b2h
 
-
-persistent_data_file = os.path.expanduser(os.getenv('PERSISTENT_DATA_FILE', '~/trace_frozen_data.json'))
+persistent_data_file_in = os.getenv('PERSISTENT_DATA_FILE', '~/trace_frozen_data.json')
+persistent_data_file = os.path.expanduser(persistent_data_file_in)
 
 
 def fromWIF(x):
@@ -59,10 +59,11 @@ def main():
     r = callrpc(rpc_port, rpc_auth, 'getnetworkinfo')
     print('Core version', r['version'])
     print('Use anon spend keys', use_anon_spend_keys)
-    print('Persistent data path', persistent_data_file)
+    print('Persistent data path', persistent_data_file_in)
+
 
     spent_anon_inputs = {}
-    blacklisted_anon_outputs = []
+    blacklisted_aos = []
     if os.path.exists(persistent_data_file):
         with open(persistent_data_file) as fp:
             json_data = json.load(fp)
@@ -76,7 +77,10 @@ def main():
 
     used_keyimages = set()
 
+    inputs_map = {}
+
     def trace_tx_inputs(itx, spending_txid, spending_tx, issues):
+        #print(json.dumps(itx, indent=4))
         txid = itx['txid']
         tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txid, True])
 
@@ -97,9 +101,15 @@ def main():
                 for txo_verify in itx['outputs']:
                     if txo['n'] != txo_verify['n']:
                         continue
-                    rv = callrpc(rpc_port, rpc_auth, 'verifycommitment', [txo['valueCommitment'], txo_verify['blind'], format8(txo_verify['value'])])
-                    assert(rv['result'] is True)
-                    total_out += txo_verify['value']
+
+                    try:
+                        rv = callrpc(rpc_port, rpc_auth, 'verifycommitment', [txo['valueCommitment'], txo_verify['blind'], format8(txo_verify['value'])])
+                        assert(rv['result'] is True)
+                        total_out += txo_verify['value']
+                    except Exception as e:
+                        warning = 'Warning: verifycommitment failed for output {} for tx {}.'.format(txo['n'], txid)
+                        print(warning)
+                        issues.append(warning)
                     found_vout = True
 
                     if txo_type == 'anon':
@@ -159,9 +169,27 @@ def main():
             elif txo_type == 'standard':
                 total_out += txo['valueSat']
 
-        if 'inputs' in itx:
-            for txi_verify in itx['inputs']:
-                total_in += trace_tx_inputs(txi_verify, txid, tx, issues)
+        if itx['input_type'] != 'plain' and 'inputs' in itx:
+            tx_inputs = None
+            if itx['inputs'] == 'repeat':
+                if txid in inputs_map:
+                    #tx_inputs = inputs_map[txid]
+                    total_in += inputs_map[txid]
+                    tx_inputs = []
+            else:
+                tx_inputs = itx['inputs']
+
+            if tx_inputs is None:
+                warning = 'Warning: Missing inputs for tx {}.'.format(txid)
+                print(warning)
+                issues.append(warning)
+            else:
+                for txi_verify in tx_inputs:
+                    total_in += trace_tx_inputs(txi_verify, txid, tx, issues)
+
+                if txid not in inputs_map:
+                    #inputs_map[txid] = tx_inputs
+                    inputs_map[txid] = total_in
         else:
             for txin in tx['vin']:
                 if 'type' in txin and txin['type'] != 'standard':
