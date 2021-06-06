@@ -184,7 +184,10 @@ class ChainTracker():
                      (txid TEXT, n INTEGER, type TEXT, anon_index INTEGER, value INTEGER, is_estimate INTEGER, spent_txid TEXT, is_spent_estimate INTEGER, has_anon_ancestor INTEGER, script TEXT, script_type TEXT, address TEXT, marked INTEGER)''')
 
         c.execute('''CREATE TABLE anon_inputs
-                     (txid TEXT, n INTEGER, inputs INTEGER, ring_size INTEGER, prevouts TEXT)''')
+                     (id INTEGER PRIMARY KEY, txid TEXT, n INTEGER, inputs INTEGER, ring_size INTEGER, prevouts TEXT, real_column INTEGER)''')
+
+        c.execute('''CREATE TABLE anon_input_ring_members
+                     (anon_input_id INTEGER, row INTEGER, column INTEGER, anon_index INTEGER)''')
 
         c.execute('''CREATE TABLE anon_out_estimate_adj
                      (anon_index INTEGER, txid TEXT, reduce_by INTEGER)''')
@@ -272,15 +275,26 @@ class ChainTracker():
                     num_anon_in += 1
 
                     ring_members = []
+                    ring_members_split = []
                     for i in range(1000):
                         row = 'ring_row_{}'.format(i)
                         if row not in tx_input:
                             break
                         ring_members.append(tx_input[row])
+                        ais = tx_input[row].split(',')
+                        for column, anon_index in enumerate(ais):
+                            ring_members_split.append((i, column, anon_index))
                     rsi.append([tx_input['num_inputs'], tx_input['ring_size'], ring_members])
 
                     self.db_cursor.execute('INSERT INTO anon_inputs (txid, n, inputs, ring_size, prevouts)  VALUES (?, ?, ?, ?, ?)',
                                            (txh, txi_n, tx_input['num_inputs'], tx_input['ring_size'], '\n'.join(ring_members)))
+
+                    anon_input_id = self.db_cursor.lastrowid
+                    for ai in ring_members_split:
+                        row, column, anon_index = ai
+                        self.db_cursor.execute('INSERT INTO anon_input_ring_members (anon_input_id, row, column, anon_index)  VALUES (?, ?, ?, ?)',
+                                               (anon_input_id, row, column, anon_index))
+
                     continue
 
                 prev_tx = self.callrpc('getrawtransaction', [tx_input['txid'], True])

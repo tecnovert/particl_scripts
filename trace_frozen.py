@@ -26,7 +26,7 @@ import os
 import sys
 import json
 import time
-from util import callrpc, make_int, format8, b58decode
+from util import callrpc, make_int, format8, b58decode, COIN
 from ecc_util import hashToCurve, pointToCPK, G, b2i, b2h
 
 persistent_data_file_in = os.getenv('PERSISTENT_DATA_FILE', '~/trace_frozen_data.json')
@@ -91,21 +91,33 @@ def main():
 
         total_in = 0
         total_out = make_int(ct_fee)
-        spent_out = 0  # pass up to verify spending_txid
+        spent_out = 0  # Pass up to verify spending_txid
 
+        claimed_outputs = []
+        outputs_by_type = {}
+        known_output_values = {}
         # Verify the claimed output amounts
         for txo in tx['vout']:
             txo_type = txo['type']
+            if txo_type == 'data':
+                continue
+            outputs_by_type[txo_type] = outputs_by_type.get(txo_type, 0) + 1
+
             if txo_type in ['anon', 'blind']:
                 found_vout = False
                 for txo_verify in itx['outputs']:
                     if txo['n'] != txo_verify['n']:
                         continue
 
+                    if spending_txid is None:
+                        if txo_verify['value'] > 200 * COIN:
+                            claimed_outputs.append((txo['n'], txo_type, txo_verify['anon_index'] if txo_type == 'anon' else None, txo_verify['value']))
+
                     try:
                         rv = callrpc(rpc_port, rpc_auth, 'verifycommitment', [txo['valueCommitment'], txo_verify['blind'], format8(txo_verify['value'])])
                         assert(rv['result'] is True)
                         total_out += txo_verify['value']
+                        known_output_values[txo['n']] = (txo_type, txo_verify['value'])
                     except Exception as e:
                         warning = 'Warning: verifycommitment failed for output {} for tx {}.'.format(txo['n'], txid)
                         print(warning)
@@ -118,6 +130,10 @@ def main():
                             warning = 'Warning: Blacklisted anon output: {}.'.format(anon_index)
                             print(warning)
                             issues.append(warning)
+
+                        pubkey = txo['pubkey']
+                        ao_check = callrpc(rpc_port, rpc_auth, 'anonoutput', [pubkey])
+                        assert(ao_check['index'] == anon_index)
 
                     if spending_txid is not None and 'spent_by' in txo_verify and spending_txid == txo_verify['spent_by']:
                         spent_out += txo_verify['value']
@@ -168,6 +184,11 @@ def main():
                     issues.append(warning)
             elif txo_type == 'standard':
                 total_out += txo['valueSat']
+                known_output_values[txo['n']] = (txo_type, txo['valueSat'])
+            else:
+                warning = 'Warning: Unknown output type {} for tx {}.'.format(txo_type, txid)
+                print(warning)
+                issues.append(warning)
 
         if itx['input_type'] != 'plain' and 'inputs' in itx:
             tx_inputs = None
@@ -208,9 +229,26 @@ def main():
 
         print('txid', txid)
         if spending_txid is not None:
-            print('input for ', spending_txid)
-        print('total_in', total_in)
-        print('total_out', total_out)
+            print('\tinput for ', spending_txid)
+        print('\ttotal_in', total_in)
+        print('\ttotal_out', total_out)
+
+
+        num_outputs = sum(outputs_by_type.values())
+        num_known_outputs = len(known_output_values)
+
+        print('\tOutputs known: {}/{}'.format(num_known_outputs, num_outputs))
+        if num_outputs != num_known_outputs:
+            for k, v in known_output_values.items():
+                print('\t\t', k, *v)
+
+            #for k, v in outputs_by_type.items():
+            #    print('\t\tKnown {}: {}/{}'.format(k, outputs_by_type[k], v))
+
+        #print('\toutputs_by_type', outputs_by_type)
+
+        #print('total_out', total_out)
+        #print('total_out', total_out)
 
         if total_out > total_in:
             warning = 'Warning: Mismatched value for tx: out > in {}.'.format(txid)
@@ -221,24 +259,34 @@ def main():
             print(warning)
             issues.append(warning)
 
-        return spent_out
+        if spending_txid is not None:
+            return spent_out
+        else:
+            return claimed_outputs
 
-    txids_likely_valid = []
-    txids_check_further = []
+    txns_likely_valid = []
+    txns_check_further = []
     for itx in input_json['transactions']:
         print('')
         issues = []
-        trace_tx_inputs(itx, None, None, issues)
+        outputs = trace_tx_inputs(itx, None, None, issues)
         if len(issues) == 0:
-            txids_likely_valid.append(itx['txid'])
+            txns_likely_valid.append((itx['txid'], outputs))
         else:
-            txids_check_further.append(itx['txid'])
+            txns_check_further.append((itx['txid'], outputs))
     print('')
+
     print('Likely valid txids:')
-    print('\n'.join(txids_likely_valid))
+    for pair in txns_likely_valid:
+        print(pair[0])
+        for output in pair[1]:
+            print('    ', *output)
 
     print('Unproven txids:')
-    print('\n'.join(txids_check_further))
+    for pair in txns_check_further:
+        print(pair[0])
+        for output in pair[1]:
+            print('    ', *output)
 
     with open(persistent_data_file, 'w') as fp:
         json_data = {'spent_anon_inputs': spent_anon_inputs,
