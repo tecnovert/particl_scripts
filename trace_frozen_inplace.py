@@ -63,6 +63,7 @@ def main():
     rpc_port = 51735 if chain == 'mainnet' else 51935
 
     r = callrpc(rpc_port, rpc_auth, 'getnetworkinfo')
+    print('Time', time.strftime('%Y-%m-%d %H:%M:%S %Z', time.gmtime()))
     print('Core version', r['version'])
     print('Use anon spend keys', use_anon_spend_keys)
     print('Persistent data path', persistent_data_file_in)
@@ -151,7 +152,6 @@ def main():
                         known_output_values[txo['n']] = (txo_type, txo_verify['value'])
                     except Exception as e:
                         warning = 'Warning: verifycommitment failed for output {} for tx {}.'.format(txo['n'], txid)
-                        print(warning)
                         tx_issues.append(warning)
                     found_vout = True
 
@@ -159,7 +159,6 @@ def main():
                         anon_index = txo_verify['anon_index']
                         if anon_index in blacklisted_aos:
                             warning = 'Warning: Blacklisted anon output: {}.'.format(anon_index)
-                            print(warning)
                             tx_issues.append(warning)
 
                         pubkey = txo['pubkey']
@@ -211,14 +210,12 @@ def main():
                     break
                 if found_vout is False:
                     warning = 'Warning: Missing output {} for tx {}.'.format(txo['n'], txid)
-                    print(warning)
                     tx_issues.append(warning)
             elif txo_type == 'standard':
                 total_out += txo['valueSat']
                 known_output_values[txo['n']] = (txo_type, txo['valueSat'])
             else:
                 warning = 'Warning: Unknown output type {} for tx {}.'.format(txo_type, txid)
-                print(warning)
                 tx_issues.append(warning)
 
         if itx['input_type'] != 'plain' and 'inputs' in itx:
@@ -234,7 +231,6 @@ def main():
 
             if tx_inputs is None:
                 warning = 'Warning: Missing inputs for tx {}.'.format(txid)
-                print(warning)
                 tx_issues.append(warning)
             else:
                 for txi_verify in tx_inputs:
@@ -250,14 +246,12 @@ def main():
             for txin in tx['vin']:
                 if 'type' in txin and txin['type'] != 'standard':
                     warning = 'Warning: Missing blinded inputs for tx {}.'.format(txid)
-                    print(warning)
                     tx_issues.append(warning)
                 else:
                     prev_tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txin['txid'], True])
                     prevout = prev_tx['vout'][txin['vout']]
                     if prevout['type'] != 'standard':
                         warning = 'Error: Missing plain inputs for tx {}.'.format(txid)
-                        print(warning)
                         tx_issues.append(warning)
                         assert(False)
                     else:
@@ -265,6 +259,7 @@ def main():
                         known_input_values.append(prevout['valueSat'])
 
         print('txid', txid)
+        print('\ttime', time.strftime('%Y-%m-%d %H:%M:%S %Z', time.gmtime(tx['time'])))
         if spending_txid is not None:
             #print('\tinput for', spending_txid)
             print('\tinput for', spending_path)
@@ -289,16 +284,19 @@ def main():
             if dbc is not None and len(known_input_values) < num_inputs:
                 cur = dbc.cursor()
                 total_possible_input = 0
+                values_matrix = []
                 for txin in tx['vin']:
                     if 'type' in txin and txin['type'] == 'blind':
                         cur.execute('SELECT value, is_estimate FROM outputs WHERE txid=? AND n=?', (txin['txid'], txin['vout']))
                         total_possible_input += cur.fetchone()[0]
                     elif 'type' in txin and txin['type'] == 'anon':
-                        print('MLSAG rows, cols:', txin['num_inputs'], txin['ring_size'])
+                        print('\t' + 'MLSAG rows, cols:', txin['num_inputs'], txin['ring_size'])
                         str_hdr = ''
                         for i in range(txin['ring_size']):
                             str_hdr += str(i).ljust(32)
-                        print(str_hdr)
+                        print('\t' + str_hdr)
+
+                        sum_column_vals = [0] * int(txin['ring_size'])
                         for i in range(txin['num_inputs']):
                             ring_row = txin['ring_row_{}'.format(i)]
                             ais = [int(i) for i in ring_row.split(', ')]
@@ -315,8 +313,9 @@ def main():
                             str_row = ''
                             for c, ai in enumerate(ais):
                                 str_row += (str(aos[ai][0]) + aos[ai][1] + ' ' + str(ai)).ljust(32)
-                            print(str_row)
-
+                                sum_column_vals[c] += aos[ai][0]
+                            print('\t' + str_row)
+                        total_possible_input += max(sum_column_vals)
                     else:
                         num_inputs += 1
                     cur.close()
@@ -325,7 +324,6 @@ def main():
                 itx['total_possible_input'] = total_possible_input
                 if total_possible_input < total_out:
                     warning = 'Warning: possible input value < output value {}.'.format(txid)
-                    print(warning)
                     tx_issues.append(warning)
 
             print('\tInputs known: {}/{}'.format(len(known_input_values), num_inputs))
@@ -342,12 +340,13 @@ def main():
 
         if total_out > total_in:
             warning = 'Warning: Mismatched value for tx: out > in {}.'.format(txid)
-            print(warning)
             tx_issues.append(warning)
         elif total_in != total_out:
             warning = 'Warning: Mismatched value for tx: in != out {}.'.format(txid)
-            print(warning)
             tx_issues.append(warning)
+
+        for issue in tx_issues:
+            print('\t' + issue)
 
         itx['issues'] = tx_issues
         issues += tx_issues
