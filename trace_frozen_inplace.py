@@ -35,7 +35,7 @@ from ecc_util import hashToCurve, pointToCPK, G, b2i, b2h
 persistent_data_file_in = os.getenv('PERSISTENT_DATA_FILE', '~/trace_frozen_data.json')
 persistent_data_file = os.path.expanduser(persistent_data_file_in)
 
-chain_info_db_file_in = os.getenv('CHAIN_INFO_DB_FILE', '~/v23_anon_stats/chain_stats.db')
+chain_info_db_file_in = os.getenv('CHAIN_INFO_DB_FILE', '~/v24_anon_stats/chain_stats.db')
 chain_info_db_file = os.path.expanduser(chain_info_db_file_in)
 
 
@@ -251,9 +251,8 @@ def main():
                     prev_tx = callrpc(rpc_port, rpc_auth, 'getrawtransaction', [txin['txid'], True])
                     prevout = prev_tx['vout'][txin['vout']]
                     if prevout['type'] != 'standard':
-                        warning = 'Error: Missing plain inputs for tx {}.'.format(txid)
+                        warning = 'Warning: Missing blinded inputs for tx {}.'.format(txid)
                         tx_issues.append(warning)
-                        assert(False)
                     else:
                         total_in += prevout['valueSat']
                         known_input_values.append(prevout['valueSat'])
@@ -318,7 +317,7 @@ def main():
                         total_possible_input += max(sum_column_vals)
                     else:
                         num_inputs += 1
-                    cur.close()
+                cur.close()
 
                 print('\ttotal_possible_input', total_possible_input)
                 itx['total_possible_input'] = total_possible_input
