@@ -35,8 +35,10 @@ from ecc_util import hashToCurve, pointToCPK, G, b2i, b2h
 persistent_data_file_in = os.getenv('PERSISTENT_DATA_FILE', '~/trace_frozen_data.json')
 persistent_data_file = os.path.expanduser(persistent_data_file_in)
 
-chain_info_db_file_in = os.getenv('CHAIN_INFO_DB_FILE', '~/v24_anon_stats/chain_stats.db')
+chain_info_db_file_in = os.getenv('CHAIN_INFO_DB_FILE', '~/v25_anon_stats/chain_stats.db')
 chain_info_db_file = os.path.expanduser(chain_info_db_file_in)
+
+all_claims_file = os.path.expanduser('~/all_claims.csv')
 
 
 def fromWIF(x):
@@ -47,6 +49,7 @@ def main():
     use_anon_spend_keys = False
     particl_data_dir = os.path.expanduser(sys.argv[1])
     input_file = os.path.expanduser(sys.argv[2])
+    claim_id = sys.argv[3]
 
     if len(sys.argv) > 3:
         use_anon_spend_keys = True if sys.argv[3].lower() == 'true' else False
@@ -142,9 +145,13 @@ def main():
                         continue
 
                     if spending_txid is None:
-                        if txo_verify['value'] > 200 * COIN:
+                        if txo_verify['value'] > 200 * COIN and not txo_verify['spent']:
                             claimed_outputs.append((txo['n'], txo_type, txo_verify['anon_index'] if txo_type == 'anon' else None, txo_verify['value']))
 
+                            if dbc is not None and txo_type == 'blind':
+                                cur = dbc.cursor()
+                                cur.execute('SELECT spent_txid FROM outputs WHERE txid = "{}" AND n = {}'.format(txid, txo['n']))
+                                assert(cur.fetchone()[0] is None)
                     try:
                         rv = callrpc(rpc_port, rpc_auth, 'verifycommitment', [txo['valueCommitment'], txo_verify['blind'], format8(txo_verify['value'])])
                         assert(rv['result'] is True)
@@ -383,6 +390,18 @@ def main():
         print(pair[0])
         for output in pair[1]:
             print('    ', *output)
+
+    #print('CSV format:')
+    with open(all_claims_file, 'a+') as fp:
+        for pair in txns_likely_valid:
+            for output in pair[1]:
+                vout, output_type, anon_index, value = output
+                fp.write('{},{},{},{},{},{}\n'.format(claim_id, pair[0], vout, anon_index, value, 'Yes'))
+        for pair in txns_check_further:
+            for output in pair[1]:
+                vout, output_type, anon_index, value = output
+                fp.write('{},{},{},{},{},{}\n'.format(claim_id, pair[0], vout, anon_index, value, 'No'))
+
 
     with open(persistent_data_file, 'w') as fp:
         json_data = {'spent_anon_inputs': spent_anon_inputs,
