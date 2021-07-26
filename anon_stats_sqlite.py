@@ -7,11 +7,13 @@
 
 """
 
-~/tmp/particl-0.19.2.11/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.12/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 
 rm -r /tmp/anon_stats || true
 mkdir -p /tmp/anon_stats
 python anon_stats_sqlite.py -outputdir=/tmp/anon_stats -knowninfodir=~/known_wallets -totime=1614268800 > /tmp/anon_stats.txt
+
+python anon_stats_sqlite.py -outputdir=/tmp/anon_stats -knowninfodir=~/known_wallets > /tmp/anon_stats.txt
 
 """
 

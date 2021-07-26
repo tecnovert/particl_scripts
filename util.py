@@ -55,6 +55,10 @@ def dumpj(jin, indent=4):
     return json.dumps(jin, indent=indent, default=jsonDecimal)
 
 
+def dumpje(jin, replace_with='\\"'):
+    return json.dumps(jin, default=jsonDecimal).replace('"', replace_with)
+
+
 class Jsonrpc():
     def __init__(self, uri, transport=None, encoding=None, verbose=False,
                  allow_none=False, use_datetime=False, use_builtin_types=False,
