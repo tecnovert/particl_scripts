@@ -7,13 +7,15 @@
 
 """
 
-export PARTICL_BINDIR=/tmp/partbuild/src; python3 orphaned_blocks.py
+export PARTICL_BINDIR=~/tmp/particl-0.19.2.12/bin/; python3 test_zap.py
 
 """
 
 import os
+import re
 import sys
 import json
+import random
 import shutil
 import signal
 import logging
@@ -21,7 +23,7 @@ import threading
 import traceback
 import subprocess
 from contrib.rpcauth import generate_salt, password_to_hmac
-from util import dumpje
+from util import dumpje, format8, COIN
 
 PARTICL_BINDIR = os.path.expanduser(os.getenv('PARTICL_BINDIR', '.'))
 PARTICLD = 'particld'
@@ -30,7 +32,7 @@ PARTICL_TX = 'particl-tx'
 
 DATADIRS = '/tmp/parttest'
 
-NUM_NODES = 2
+NUM_NODES = 3
 BASE_PORT = 14792
 BASE_RPC_PORT = 19792
 DEBUG_MODE = True
@@ -73,15 +75,19 @@ def prepareDir(datadir, node_id):
         fp.write('listenonion=0\n')
         fp.write('bind=127.0.0.1\n')
         fp.write('findpeers=0\n')
+        fp.write('debugdevice=0\n')
 
         if DEBUG_MODE:
             fp.write('debug=1\n')
         fp.write('debugexclude=libevent\n')
+        fp.write('displaylocaltime=1\n')
         fp.write('acceptnonstdtxn=0\n')
         fp.write('minstakeinterval=1\n')
-        fp.write('checkpeerheight=0\n')
-        fp.write('minstakeinterval=1\n')
-        fp.write('stakethreadconddelayms=1000\n')
+
+        for i in range(0, NUM_NODES):
+            if node_id == i:
+                continue
+            fp.write('addnode=127.0.0.1:{}\n'.format(BASE_PORT + i))
 
 
 def startDaemon(node_id, bindir):
@@ -93,9 +99,10 @@ def startDaemon(node_id, bindir):
     out = p.communicate()
     dversion = out[0].decode('utf-8').split('\n')[0]
 
+    args = [command_cli, '-datadir=' + node_dir]
+
     logging.info('Starting node ' + str(node_id) + '    ' + dversion + '\n'
                  + PARTICLD + ' ' + '-datadir=' + node_dir + '\n')
-    args = [command_cli, '-datadir=' + node_dir]
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out = p.communicate()
 
@@ -122,21 +129,20 @@ def callrpc(node_id, cmd):
     return r
 
 
-def waitForPeers(node, num_peers, nTries=10):
+def waitForMempool(node, txid, nTries=10):
     for i in range(nTries):
         delay_event.wait(1)
         if delay_event.is_set():
-            raise ValueError('waitForPeers stopped.')
+            raise ValueError('waitForMempool stopped.')
         try:
-            ro = callrpc(node, 'getpeerinfo'.format())
-            if len(ro) >= num_peers:
-                return True
+            ro = callrpc(node, 'getmempoolentry {}'.format(txid))
         except Exception:
             continue
-    raise ValueError('waitForPeers timed out.')
+        return True
+    raise ValueError('waitForMempool timed out.')
 
 
-def waitForHeight(node, nHeight, nTries=60):
+def waitForHeight(node, nHeight, nTries=500):
     for i in range(nTries):
         delay_event.wait(1)
         if delay_event.is_set():
@@ -160,71 +166,58 @@ def stakeBlocks(node_id, num_blocks):
 
 def doTest():
 
-    short_chain_height = 3
-    long_chain_height = 4
+    stake_addr = callrpc(1, 'getnewaddress')
 
-    bal_0_before = callrpc(0, 'getbalances')
+    addr2 = []
+    for i in range(10):
+        addr2.append(callrpc(2, 'getnewaddress'))
+    addr2_sx0 = callrpc(2, 'getnewstealthaddress')
 
-    logging.info('Staking {} blocks on node 0'.format(short_chain_height))
-    stakeBlocks(0, short_chain_height)
+    txids = []
+    for i in range(20):
+        txids.append(callrpc(1, 'sendtoaddress {} {}'.format(addr2[i % 10], format8(random.randint(0.001 * COIN, 10 * COIN)))))
 
-    logging.info('Staking {} blocks on node 1'.format(long_chain_height))
-    stakeBlocks(1, long_chain_height)
+    txids.append(callrpc(1, 'sendtoaddress {} {}'.format(addr2_sx0, 1.111)))
 
-    logging.info('Connecting nodes')
-    callrpc(0, 'addconnection "127.0.0.1:{}" "outbound-full-relay"'.format(BASE_PORT + 1))
+    logging.info('Syncing mempool...')
+    for txid in txids:
+        waitForMempool(0, txid)
 
-    waitForPeers(0, 1)
-    waitForPeers(1, 1)
+    logging.info('Staking...')
+    stakeBlocks(0, 1)
 
-    waitForHeight(0, long_chain_height)
-    bci_0 = callrpc(0, 'getblockchaininfo')
-    bci_1 = callrpc(1, 'getblockchaininfo')
+    datadir_2 = os.path.join(DATADIRS, '2')
 
-    print(json.dumps(bci_0, indent=4))
-    print(json.dumps(bci_1, indent=4))
-    assert(bci_0['bestblockhash'] == bci_1['bestblockhash'])
+    logging.info('testing zap maxinputs=1...')
+    args = ['./zap.py', '--loop=false', '--maxinputs=1', '--network=regtest', '--datadir', datadir_2, stake_addr]
+    result = subprocess.run(args, capture_output=True)
 
-    bal_0_after = callrpc(0, 'getbalances')
-    print('bal_0_before', json.dumps(bal_0_before, indent=4))
-    print('bal_0_after', json.dumps(bal_0_after, indent=4))
-    assert(bal_0_after['mine']['trusted'] == bal_0_before['mine']['trusted'])
+    sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
+    assert(len(sent_txids) == 1)
 
-    ftx_0 = callrpc(0, 'filtertransactions')
-    print('ftx_0', json.dumps(ftx_0, indent=4))
-    num_orphaned = 0
-    for tx in ftx_0:
-        if tx['category'] == 'orphaned_stake':
-            assert(tx['abandoned'] is True)
-            num_orphaned += 1
-    assert(num_orphaned == short_chain_height)
-    assert(len(ftx_0) == 1 + short_chain_height)
+    txid = sent_txids[0]
+    tx = callrpc(2, 'gettransaction {} true true'.format(txid))
+    assert(len(tx['decoded']['vin']) == 1)
+    assert(tx['decoded']['vout'][0]['scriptPubKey']['stakeaddresses'][0] == stake_addr)
 
-    rv = callrpc(0, 'pruneorphanedblocks')
-    print('pruneorphanedblocks', json.dumps(rv, indent=4))
-    assert(rv['files'][0]['blocks_removed'] == short_chain_height)
+    logging.info('testing zap nomix=true...')
+    args = ['./zap.py', '--loop=false', '--nomix=true', '--network=regtest', '--datadir', datadir_2, stake_addr]
+    result = subprocess.run(args, capture_output=True)
 
-    rv = callrpc(0, 'pruneorphanedblocks false')
-    print('pruneorphanedblocks', json.dumps(rv, indent=4))
+    sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
+    assert(len(sent_txids) == 1)
 
-    delay_event.wait(5)
-    startDaemon(0, PARTICL_BINDIR)
-    num_tries = 10
-    k = 0
-    for k in range(num_tries):
-        try:
-            callrpc(0, 'getnetworkinfo')
-        except Exception as e:
-            delay_event.wait(1)
-            continue
-        break
-    if k >= num_tries - 1:
-        raise ValueError('Can\'t contact node ' + str(0))
+    logging.info('testing zap maxinputs=3...')
+    args = ['./zap.py', '--minwait=1', '--maxwait=1', '--maxinputs=3', '--network=regtest', '--datadir', datadir_2, stake_addr]
+    result = subprocess.run(args, capture_output=True)
 
-    rv = callrpc(0, 'pruneorphanedblocks')
-    print('pruneorphanedblocks', json.dumps(rv, indent=4))
+    sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
+    assert(len(sent_txids) > 1)
+    txid = sent_txids[0]
+    tx = callrpc(2, 'gettransaction {} true true'.format(txid))
+    assert(len(tx['decoded']['vin']) == 3)
 
-    logging.info('Test passed!')
+    logging.info('Test Passed!')
 
 
 def runTest(resetData):
@@ -270,6 +263,7 @@ def runTest(resetData):
 
     callrpc(0, 'extkeygenesisimport "abandon baby cabbage dad eager fabric gadget habit ice kangaroo lab absorb"')
     callrpc(1, 'extkeyimportmaster "pact mammal barrel matrix local final lecture chunk wasp survey bid various book strong spread fall ozone daring like topple door fatigue limb olympic" "" false "Master Key" "Default Account" 0 "{\\"createextkeys\\": 1}"')
+    callrpc(2, 'extkeygenesisimport "sección grito médula hecho pauta posada nueve ebrio bruto buceo baúl mitad"')
 
     try:
         doTest()

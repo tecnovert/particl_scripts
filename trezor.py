@@ -12,8 +12,8 @@ export PARTICL_BINDIR=/tmp/partbuild/src; python3 trezor.py
 """
 
 import os
-import json
 import sys
+import json
 import shutil
 import signal
 import logging
@@ -153,7 +153,7 @@ def waitForHeight(node, nHeight, nTries=500):
 
 def stakeToHeight(node_id, height):
     callrpc(node_id, 'walletsettings stakelimit "%s"' % (dumpje({'height': height})))
-    callrpc(node_id, 'reservebalance true 0')
+    callrpc(node_id, 'reservebalance false')
     waitForHeight(node_id, height)
 
 
