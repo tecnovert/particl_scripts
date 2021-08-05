@@ -13,7 +13,7 @@ This script creates transactions to a stake-script consisting of
 the provided "stakeaddress" and a newly generated spend address.
 
 Inputs are added from the list of unspent p2pkh outputs until either the
-total value is greater than or equals  "maxvalue" or the number of
+total value is greater than or equal to "maxvalue" or the number of
 inputs equals "maxinputs".
 Inputs will be grouped by address.  If "nomix" is true only inputs from
 the same address will be selected.
@@ -220,6 +220,14 @@ class Zapper():
         r = self.callrpc('getnetworkinfo')
         logging.info('Particl Core version {}'.format(r['version']))
 
+        if self.settings.stakeaddress == '':
+            r = self.callrpc('walletsettings', ['changeaddress'])
+            try:
+                self.settings.stakeaddress = r['changeaddress']['coldstakingaddress']
+                logging.info('Set stakeaddress from walletsettings: {}'.format(self.settings.stakeaddress))
+            except Exception:
+                raise ValueError('Failed to set stakeaddress from walletsettings')
+
         r = self.callrpc('validateaddress', [self.settings.stakeaddress])
         assert(r['isvalid'] is True), 'Invalid stakeaddress'
 
@@ -302,6 +310,8 @@ class Zapper():
                 continue
             break
 
+        if self.settings.testonly:
+            raise ValueError('exit')
         spend_address = self.callrpc('getnewaddress', ['zap', False, False, True])
 
         cc_inputs = []
@@ -332,18 +342,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('-v', '--version', action='version',
                         version='%(prog)s {version}'.format(version=__version__))
-    parser.add_argument('--network', dest='network', help='Chain to use [mainnet, testnet, regtest]', default='mainnet', required=False)
-    parser.add_argument('--datadir', dest='datadir', help='Particl datadir', default='~/.particl', required=False)
+    parser.add_argument('--network', dest='network', help='Chain to use [mainnet, testnet, regtest] (default=mainnet)', default='mainnet', required=False)
+    parser.add_argument('--datadir', dest='datadir', help='Particl datadir (default=~/.particl)', default='~/.particl', required=False)
     parser.add_argument('--rpcport', dest='rpcport', help='RPC port, read from particl.conf or set to chain default if ommitted', type=int, default=0, required=False)
     parser.add_argument('--rpcwallet', dest='rpcwallet', help='Wallet to use', default='', required=False)
-    parser.add_argument('--minvalue', dest='minvalue', help='Minimum value of transaction to create', default='0.1', required=False)
-    parser.add_argument('--maxvalue', dest='maxvalue', help='Maximum value of inputs to select', default='1000.0', required=False)
-    parser.add_argument('--maxinputs', dest='maxinputs', help='Maximum number of inputs to select [1, 100]', type=int, default=20, required=False)
-    parser.add_argument('--nomix', dest='nomix', help='If true only inputs from the same address will be combined', type=make_boolean, default=False, required=False)
-    parser.add_argument('--minwait', dest='minwait', help='Minimum number of seconds to wait before repeating [1, 3600]', type=int, default=1, required=False)
-    parser.add_argument('--maxwait', dest='maxwait', help='Maximum number of seconds to wait before repeating [1, 7200]', type=int, default=600, required=False)
-    parser.add_argument('--loop', dest='loop', help='Exit after creating first transaction if false', type=make_boolean, default=True, required=False)
-    parser.add_argument('stakeaddress', help='The stake address to send to.')
+    parser.add_argument('--minvalue', dest='minvalue', help='Minimum value of transaction to create (default=0.1)', default='0.1', required=False)
+    parser.add_argument('--maxvalue', dest='maxvalue', help='Maximum value of inputs to select (default=1000.0)', default='1000.0', required=False)
+    parser.add_argument('--maxinputs', dest='maxinputs', help='Maximum number of inputs to select [1, 100] (default=20)', type=int, default=20, required=False)
+    parser.add_argument('--nomix', dest='nomix', help='If true only inputs from the same address will be combined (default=false)', type=make_boolean, default=False, required=False)
+    parser.add_argument('--minwait', dest='minwait', help='Minimum number of seconds to wait before repeating [1, 3600] (default=1)', type=int, default=1, required=False)
+    parser.add_argument('--maxwait', dest='maxwait', help='Maximum number of seconds to wait before repeating [1, 7200] (default=600)', type=int, default=600, required=False)
+    parser.add_argument('--loop', dest='loop', help='Exit after creating first transaction if false (default=false)', type=make_boolean, default=True, required=False)
+    parser.add_argument('--testonly', dest='testonly', help='transactions are not submitted if true (default=false)', type=make_boolean, default=False, required=False)
+    parser.add_argument('stakeaddress', help='The stake address to send to, read from coldstakingaddress if unset.', default='', nargs='?')
 
     args = parser.parse_args()
 

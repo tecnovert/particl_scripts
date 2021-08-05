@@ -9,6 +9,8 @@
 
 export PARTICL_BINDIR=~/tmp/particl-0.19.2.12/bin/; python3 test_zap.py
 
+export PARTICL_BINDIR=/tmp/partbuild/src; python3 test_zap.py
+
 """
 
 import os
@@ -167,15 +169,17 @@ def stakeBlocks(node_id, num_blocks):
 def doTest():
 
     stake_addr = callrpc(1, 'getnewaddress')
+    stake_addr_2 = callrpc(1, 'getnewaddress')
+    stake_addr_ext = callrpc(1, 'getnewextaddress')
 
     addr2 = []
-    for i in range(10):
+    for i in range(20):
         addr2.append(callrpc(2, 'getnewaddress'))
     addr2_sx0 = callrpc(2, 'getnewstealthaddress')
 
     txids = []
     for i in range(20):
-        txids.append(callrpc(1, 'sendtoaddress {} {}'.format(addr2[i % 10], format8(random.randint(0.001 * COIN, 10 * COIN)))))
+        txids.append(callrpc(1, 'sendtoaddress {} {}'.format(addr2[i], format8(random.randint(0.001 * COIN, 10 * COIN)))))
 
     txids.append(callrpc(1, 'sendtoaddress {} {}'.format(addr2_sx0, 1.111)))
 
@@ -206,6 +210,37 @@ def doTest():
 
     sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
     assert(len(sent_txids) == 1)
+    txid = sent_txids[0]
+    tx = callrpc(2, 'gettransaction {} true true'.format(txid))
+    assert(len(tx['decoded']['vin']) == 1)
+    assert(tx['decoded']['vout'][0]['scriptPubKey']['stakeaddresses'][0] == stake_addr)
+
+    logging.info('testing zap infer stakeaddress...')
+    r = callrpc(2, 'walletsettings changeaddress "{}"'.format(dumpje({'coldstakingaddress': stake_addr_2})))
+    args = ['./zap.py', '--loop=false', '--nomix=true', '--network=regtest', '--datadir', datadir_2]
+    result = subprocess.run(args, capture_output=True)
+
+    sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
+    assert(len(sent_txids) == 1)
+    txid = sent_txids[0]
+    tx = callrpc(2, 'gettransaction {} true true'.format(txid))
+    assert(len(tx['decoded']['vin']) == 1)
+    assert(tx['decoded']['vout'][0]['scriptPubKey']['stakeaddresses'][0] == stake_addr_2)
+
+    logging.info('testing zap infer stakeaddress extaddress...')
+    expect_addr = callrpc(2, 'deriverangekeys 0 0 {}'.format(stake_addr_ext))[0]
+    r = callrpc(2, 'walletsettings changeaddress "{}"'.format(dumpje({'coldstakingaddress': stake_addr_ext})))
+    args = ['./zap.py', '--loop=false', '--nomix=true', '--network=regtest', '--datadir', datadir_2]
+    result = subprocess.run(args, capture_output=True)
+
+    sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
+    assert(len(sent_txids) == 1)
+    txid = sent_txids[0]
+    tx = callrpc(2, 'gettransaction {} true true'.format(txid))
+    assert(len(tx['decoded']['vin']) == 1)
+    assert(tx['decoded']['vout'][0]['scriptPubKey']['stakeaddresses'][0] == expect_addr)
+    r = callrpc(2, 'extkey key {}'.format(stake_addr_ext))
+    assert(int(r['num_derives']) == 1)
 
     logging.info('testing zap maxinputs=3...')
     args = ['./zap.py', '--minwait=1', '--maxwait=1', '--maxinputs=3', '--network=regtest', '--datadir', datadir_2, stake_addr]
