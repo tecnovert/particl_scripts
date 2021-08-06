@@ -25,7 +25,12 @@ unspent p2pkh outputs are found.
 Quit with ctrl + c
 
 Examples:
-Open Particl Desktop
+Start Particl Desktop
+
+Test first:
+./zap.py --rpcwallet=wallet.dat --minwait=1 --maxwait=5 --testonly=1
+
+Send to a specific stakeaddress:
 ./zap.py --rpcwallet=wallet.dat --nomix=true pcs19453kf98kz47yktqv7x36j39xa07mtvqx8evse
 """
 
@@ -162,13 +167,31 @@ def signal_handler(sig, frame):
     delay_event.set()
 
 
+class Prevout():
+    __slots__ = ('txid', 'n')
+
+    def __init__(self, txid, n):
+        self.txid = txid
+        self.n = int(n)
+
+    def __hash__(self):
+        return hash((self.txid, self.n))
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            return NotImplemented
+        return self.txid == other.txid and self.n == other.n
+
+
 class Zapper():
     def __init__(self, settings):
         self.settings = settings
-        logging.info('Network: {}'.format(self.settings.network))
         self.rpc_conn = None
-
+        self.used_outputs = set()  # Store used outputs for test only mode
+        self.num_derived = 0
         self.wallet = None if self.settings.rpcwallet == '' else self.settings.rpcwallet
+
+        logging.info('Network: {}'.format(self.settings.network))
         logging.info('Wallet: {}'.format('default' if not self.wallet else self.wallet))
 
         if self.settings.rpcport == 0:
@@ -265,9 +288,8 @@ class Zapper():
                 if len(txos) < 1:
                     del groups[addr]
                     break
-                if len(selected) >= self.settings.maxinputs:
-                    return total_value, selected
-                if total_value >= self.settings.maxvalue:
+                if len(selected) >= self.settings.maxinputs or \
+                   total_value >= self.settings.maxvalue:
                     return total_value, selected
                 try:
                     txo = txos.pop()
@@ -278,13 +300,16 @@ class Zapper():
 
             if self.settings.nomix:
                 return total_value, selected
+        return total_value, selected
 
     def zap(self):
         r = self.callrpc('listunspent')
 
         # Group by address
-        groups = dict()
+        groups = {}
         for txo in r:
+            if Prevout(txo['txid'], txo['vout']) in self.used_outputs:
+                continue
             if 'coldstaking_address' in txo:
                 continue
             if not txo['desc'].startswith('pkh('):
@@ -300,7 +325,6 @@ class Zapper():
 
         while True:
             total_value, inputs = self.selectInputs(groups)
-
             if len(inputs) < 1:
                 logging.info('No valid inputs')
                 return False
@@ -310,17 +334,32 @@ class Zapper():
                 continue
             break
 
-        if self.settings.testonly:
-            raise ValueError('exit')
-        spend_address = self.callrpc('getnewaddress', ['zap', False, False, True])
+        internal_chain = ''
+        account = self.callrpc('extkey', ['account'])
+        for c in account['chains']:
+            if 'function' in c and c['function'] == 'active_internal':
+                internal_chain = c['chain']
+                if self.settings.testonly:
+                    if self.num_derived == 0:
+                        self.num_derived = int(c['num_derives'])
+                    r = self.callrpc('deriverangekeys', [self.num_derived, self.num_derived, internal_chain, False, False, False, True])
+                    spend_address = r[0]
+                    self.num_derived += 1
+                else:
+                    spend_address = internal_chain
+                break
 
         cc_inputs = []
         for tx in inputs:
+            if self.settings.testonly:
+                self.used_outputs.add(Prevout(tx['txid'], tx['vout']))
             cc_inputs.append({'tx': tx['txid'], 'n': tx['vout']})
 
         options = {
             'inputs': cc_inputs,
             'test_mempool_accept': True,
+            'submit_tx': not self.settings.testonly,
+            'show_hex': True,
         }
         params = [
             'part',
@@ -329,8 +368,15 @@ class Zapper():
             '', '', 5, 1, False, options
         ]
         rv = self.callrpc('sendtypeto', params)
-        txid = rv['txid']
-        logging.info('Sent tx: {}, inputs {}, value {}.'.format(txid, len(cc_inputs), format8(total_value)))
+        if self.settings.testonly:
+            action = 'Test'
+            txid = self.callrpc('decoderawtransaction', [rv['hex'], ])['txid']
+        else:
+            action = 'Sent'
+            txid = rv['txid']
+        logging.info('{} tx: {}, inputs {}, value {}.'.format(action, txid, len(cc_inputs), format8(total_value)))
+        if self.settings.testonly:
+            logging.info('  hex: ' + rv['hex'])
 
         if len(groups) < 1:
             logging.info('Sent all')

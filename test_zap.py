@@ -166,6 +166,14 @@ def stakeBlocks(node_id, num_blocks):
     stakeToHeight(node_id, height + num_blocks)
 
 
+def getInternalChain(node_id):
+    account = callrpc(node_id, 'extkey account')
+    for c in account['chains']:
+        if 'function' in c and c['function'] == 'active_internal':
+            return c
+    raise ValueError('Internal chain not found.')
+
+
 def doTest():
 
     stake_addr = callrpc(1, 'getnewaddress')
@@ -193,8 +201,11 @@ def doTest():
     datadir_2 = os.path.join(DATADIRS, '2')
 
     logging.info('testing zap maxinputs=1...')
+    ic_before = getInternalChain(2)
     args = ['./zap.py', '--loop=false', '--maxinputs=1', '--network=regtest', '--datadir', datadir_2, stake_addr]
     result = subprocess.run(args, capture_output=True)
+    ic_after = getInternalChain(2)
+    assert(int(ic_after['num_derives']) == int(ic_before['num_derives']) + 1)
 
     sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
     assert(len(sent_txids) == 1)
@@ -242,12 +253,22 @@ def doTest():
     r = callrpc(2, 'extkey key {}'.format(stake_addr_ext))
     assert(int(r['num_derives']) == 1)
 
+    logging.info('testing zap testonly...')
+    unspents_before = callrpc(2, 'listunspent')
+    assert(len(unspents_before) > 3)
+    args = ['./zap.py', '--testonly=1', '--minwait=1', '--maxwait=1', '--maxinputs=3', '--network=regtest', '--datadir', datadir_2, stake_addr]
+    result = subprocess.run(args, capture_output=True)
+    unspents_after = callrpc(2, 'listunspent')
+    assert(len(unspents_before) == len(unspents_after))
+    created_txids = re.findall('Test tx: (.*?),', result.stdout.decode(), re.DOTALL)
+    assert(len(created_txids) > 3)
+
     logging.info('testing zap maxinputs=3...')
     args = ['./zap.py', '--minwait=1', '--maxwait=1', '--maxinputs=3', '--network=regtest', '--datadir', datadir_2, stake_addr]
     result = subprocess.run(args, capture_output=True)
 
     sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
-    assert(len(sent_txids) > 1)
+    assert(len(sent_txids) > 3)
     txid = sent_txids[0]
     tx = callrpc(2, 'gettransaction {} true true'.format(txid))
     assert(len(tx['decoded']['vin']) == 3)
