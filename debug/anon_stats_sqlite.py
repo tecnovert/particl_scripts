@@ -345,7 +345,6 @@ class ChainTracker():
                         self.db_cursor.execute('INSERT INTO outputs (txid, n, type, value, script, script_type, address)  VALUES (?, ?, ?, ?, ?, ?, ?)',
                                                (txh, tx_out['n'], 'P', tx_out['valueSat'], tx_out['scriptPubKey']['hex'], tx_out['scriptPubKey']['type'], ' '.join(tx_out['scriptPubKey']['addresses'])))
 
-
             #print('total_plain_in', total_plain_in)
             #print('total_plain_out', total_plain_out)
 

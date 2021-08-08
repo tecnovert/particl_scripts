@@ -1,3 +1,3 @@
-Particl Debug scripts
+Particl scripts
 =====================================
 

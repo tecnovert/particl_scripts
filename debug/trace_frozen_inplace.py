@@ -100,7 +100,7 @@ def main():
         for wm in wallet_name.split(', '):
             try:
                 replaced.append('wallet_{}'.format(wallet_names.index(wm)))
-            except:
+            except Exception:
                 wallet_names.append(wm)
                 replaced.append('wallet_{}'.format(wallet_names.index(wm)))
         return ', '.join(replaced)

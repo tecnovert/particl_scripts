@@ -1,0 +1,20 @@
+
+git clone https://github.com/tecnovert/trezor-firmware.git particl_trezor-firmware
+
+docker build -t particl_trezor .
+docker run -it --privileged -v /dev/bus/usb:/dev/bus/usb particl_trezor /bin/bash
+
+See https://github.com/tecnovert/trezor-firmware/blob/master/docs/legacy/index.md#local-development-build
+
+export EMULATOR=0 DEBUG_LINK=0 MEMORY_PROTECT=0
+poetry run ./script/setup
+poetry run ./script/cibuild
+
+
+Connect a Trezor One in bootloader mode:
+    Hold both buttons on the device and connect the usb cable.
+
+trezorctl firmware-update -f firmware/trezor.bin
+
+If built with DEBUG_LINK=1:
+trezorctl device load -m "..."
