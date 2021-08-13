@@ -98,3 +98,16 @@ def getInternalChain(node_id):
         if 'function' in c and c['function'] == 'active_internal':
             return c
     raise ValueError('Internal chain not found.')
+
+
+def waitForDaemonRpc(node_id, delay_event, nTries=10):
+    for i in range(nTries):
+        delay_event.wait(1)
+        if delay_event.is_set():
+            raise ValueError('waitForDaemonRpc stopped.')
+        try:
+            callcli(node_id, 'getnetworkinfo')
+        except Exception:
+            continue
+        return True
+    raise ValueError('waitForDaemonRpc timed out, node: {}'.format(node_id))

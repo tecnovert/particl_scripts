@@ -10,11 +10,14 @@
 export PARTICL_BINDIR=~/tmp/particl-0.19.2.13/bin/; python3 test_zap.py
 export PARTICL_BINDIR=/tmp/partbuild/src; python3 test_zap.py
 
+export PERSIST=1
+export EXTRA_CONFIG_JSON="{\"1\":[\"zmqpubhashblock=tcp://127.0.0.1:36750\",\"zmqpubsmsg=tcp://127.0.0.1:36750\",\"zmqpubhashtx=tcp://127.0.0.1:36750\"]}"
 """
 
 import os
 import re
 import sys
+import json
 import random
 import shutil
 import signal
@@ -24,18 +27,20 @@ import traceback
 import subprocess
 from contrib.rpcauth import generate_salt, password_to_hmac
 from util import dumpje, format8, COIN
+from distutils.util import strtobool
 from util_tests import (
     DATADIRS, PARTICL_BINDIR, startDaemon, callcli,
-    stakeBlocks, getInternalChain, waitForMempool)
+    waitForDaemonRpc, stakeBlocks, getInternalChain, waitForMempool)
 
-
-PATH_TO_SCRIPT = os.path.expanduser(os.getenv('PATH_TO_SCRIPT', '../'))
 
 NUM_NODES = 3
 BASE_PORT = 14792
 BASE_RPC_PORT = 19792
 DEBUG_MODE = True
 RESET_DATA = True
+PERSIST = strtobool(os.getenv('PERSIST', '0'))
+EXTRA_CONFIG_JSON = json.loads(os.getenv('EXTRA_CONFIG_JSON', '{}'))
+PATH_TO_SCRIPT = os.path.expanduser(os.getenv('PATH_TO_SCRIPT', '../'))
 
 delay_event = threading.Event()
 
@@ -82,6 +87,10 @@ def prepareDir(datadir, node_id):
         fp.write('displaylocaltime=1\n')
         fp.write('acceptnonstdtxn=0\n')
         fp.write('minstakeinterval=1\n')
+
+        if str(node_id) in EXTRA_CONFIG_JSON:
+            for opt in EXTRA_CONFIG_JSON[str(node_id)]:
+                fp.write(opt + '\n')
 
         for i in range(0, NUM_NODES):
             if node_id == i:
@@ -157,7 +166,7 @@ def doTest():
 
     logging.info('testing zap infer stakeaddress extaddress...')
     expect_addr = callcli(2, 'deriverangekeys 0 0 {}'.format(stake_addr_ext))[0]
-    r = callcli(2, 'walletsettings changeaddress "{}"'.format(dumpje({'coldstakingaddress': stake_addr_ext})))
+    callcli(2, 'walletsettings changeaddress "{}"'.format(dumpje({'coldstakingaddress': stake_addr_ext})))
     args = [zap_path, '--loop=false', '--nomix=true', '--network=regtest', '--datadir', datadir_2]
     result = subprocess.run(args, capture_output=True)
 
@@ -192,6 +201,16 @@ def doTest():
 
     logging.info('Test Passed!')
 
+    if PERSIST:
+        callcli(0, 'reservebalance false')
+        callcli(0, 'walletsettings stakelimit "%s"' % (dumpje({'height': 0})))
+        extkey2 = callcli(2, 'getnewextaddress staketest')
+        logging.info('setting node 1 coldstaking change-address to: {}'.format(extkey2))
+        callcli(1, 'walletsettings changeaddress "{}"'.format(dumpje({'coldstakingaddress': extkey2})))
+        while not delay_event.is_set():
+            logging.info('Persist mode active, height {}, ctrl+c to quit'.format(callcli(0, 'getblockcount')))
+            delay_event.wait(20)
+
 
 def runTest(resetData):
     logging.info('Installing signal handler, ctrl+c to quit')
@@ -211,18 +230,7 @@ def runTest(resetData):
         startDaemon(i, PARTICL_BINDIR)
 
     for i in range(0, NUM_NODES):
-        # Wait until all nodes are responding
-        num_tries = 10
-        k = 0
-        for k in range(num_tries):
-            try:
-                callcli(i, 'getnetworkinfo')
-            except Exception as e:
-                delay_event.wait(1)
-                continue
-            break
-        if k >= num_tries - 1:
-            raise ValueError('Can\'t contact node ' + str(i))
+        waitForDaemonRpc(i, delay_event)
 
         try:
             callcli(i, 'getwalletinfo')
@@ -230,8 +238,10 @@ def runTest(resetData):
             logging.info('Creating wallet for node: {}'.format(i))
             callcli(i, 'createwallet wallet')
 
-        if i < 2:
+        if i == 0:
             callcli(i, 'walletsettings stakingoptions "{\\"stakecombinethreshold\\":\\"100\\",\\"stakesplitthreshold\\":200}"')
+        else:
+            callcli(i, 'walletsettings stakingoptions "{\\"enabled\\":false}"')
         callcli(i, 'reservebalance true 1000000')
 
     callcli(0, 'extkeygenesisimport "abandon baby cabbage dad eager fabric gadget habit ice kangaroo lab absorb"')

@@ -278,10 +278,10 @@ class Zapper():
                     logging.info('{}/{} seconds...'.format(delayed, delay_for))
                 delayed += delay_step
 
-    def selectInputs(self, groups):
+    def selectInputs(self, groups, group_totals):
         total_value = 0
         selected = []
-        addrs = tuple(groups.keys())
+        addrs = sorted(group_totals, key=group_totals.get)
         for addr in addrs:
             txos = groups[addr]
             while True:
@@ -303,11 +303,12 @@ class Zapper():
         return total_value, selected
 
     def zap(self):
-        r = self.callrpc('listunspent')
+        utxos = self.callrpc('listunspent')
 
         # Group by address
+        group_totals = {}
         groups = {}
-        for txo in r:
+        for txo in utxos:
             if Prevout(txo['txid'], txo['vout']) in self.used_outputs:
                 continue
             if 'coldstaking_address' in txo:
@@ -317,14 +318,24 @@ class Zapper():
             addr = txo['address']
             if addr not in groups:
                 groups[addr] = []
-            groups[addr].append(txo)
+
+            # Sort from smallest to largest
+            found = False
+            for i in range(len(groups[addr])):
+                if make_int(txo['amount']) <= make_int(groups[addr][i]['amount']):
+                    groups[addr].insert(i, txo)
+                    found = True
+                    break
+            if not found:  # Was not inserted
+                groups[addr].append(txo)
+            group_totals[addr] = group_totals.get(addr, 0) + make_int(txo['amount'])
 
         if len(groups) < 1:
             logging.info('No valid inputs')
             return False
 
         while True:
-            total_value, inputs = self.selectInputs(groups)
+            total_value, inputs = self.selectInputs(groups, group_totals)
             if len(inputs) < 1:
                 logging.info('No valid inputs')
                 return False

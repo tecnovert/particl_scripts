@@ -27,7 +27,7 @@ from contrib.rpcauth import generate_salt, password_to_hmac
 from util import dumpje, format8, COIN
 from util_tests import (
     DATADIRS, PARTICL_BINDIR, startDaemon, callcli,
-    stakeBlocks, getInternalChain, waitForMempool)
+    waitForDaemonRpc, stakeBlocks, getInternalChain, waitForMempool)
 
 
 NUM_NODES = 4
@@ -142,8 +142,40 @@ def doTest():
         s_a = json.dumps(rl_a[i])
         assert(s_a == s_b), 'wallet data mismatch {}: {} {}'.format(test_commands[i], s_b, s_a)
 
+    r = callcli(1, 'extkey key {}'.format(stake_addr_ext))
+    logging.info('extkey 1 {}'.format(json.dumps(r, indent=4)))
 
-    logging.info('Test Passed!')
+    r = callcli(2, 'extkey import {}'.format(stake_addr_ext))
+
+    r = callcli(2, 'extkey options {} receive_on true'.format(stake_addr_ext))
+    logging.info('extkey options {}'.format(json.dumps(r, indent=4)))
+
+    r = callcli(2, 'extkey')
+    logging.info('2 extkey {}'.format(json.dumps(r, indent=4)))
+
+    logging.info('Restarting node 2')
+    callcli(2, 'stop')
+    delay_event.wait(10)
+    if delay_event.is_set():
+        raise ValueError('Exited')
+    startDaemon(2, PARTICL_BINDIR)
+
+    waitForDaemonRpc(2, delay_event)
+
+    try:
+        callcli(2, 'getwalletinfo')
+    except Exception as e:
+        logging.info('Loading wallet for node: {}'.format(2))
+        callcli(2, 'loadwallet wallet')
+
+    r = callcli(2, 'extkey')
+    logging.info('2 extkey {}'.format(json.dumps(r, indent=4)))
+
+    # Rescan from start of chain or earliest key
+    r = callcli(2, 'rescanblockchain 0')
+
+    r = callcli(2, 'extkey key {}'.format(stake_addr_ext))
+    logging.info('extkey 2 {}'.format(json.dumps(r, indent=4)))
 
 
 def runTest(resetData):
@@ -164,18 +196,7 @@ def runTest(resetData):
         startDaemon(i, PARTICL_BINDIR)
 
     for i in range(0, NUM_NODES):
-        # Wait until all nodes are responding
-        num_tries = 10
-        k = 0
-        for k in range(num_tries):
-            try:
-                callcli(i, 'getnetworkinfo')
-            except Exception as e:
-                delay_event.wait(1)
-                continue
-            break
-        if k >= num_tries - 1:
-            raise ValueError('Can\'t contact node ' + str(i))
+        waitForDaemonRpc(i, delay_event)
 
         try:
             callcli(i, 'getwalletinfo')
@@ -194,14 +215,13 @@ def runTest(resetData):
 
     try:
         doTest()
+        logging.info('Test Passed!')
     except Exception:
         traceback.print_exc()
-
-    logging.info('Test Complete.')
-
-    delay_event.set()
+        logging.info('Test Failed.')
 
     logging.info('Stopping nodes.')
+    delay_event.set()
     for i in range(0, NUM_NODES):
         callcli(i, 'stop')
 
