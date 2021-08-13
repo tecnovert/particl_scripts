@@ -148,7 +148,7 @@ def doTest():
     assert(len(use_inputs) == 2)
     logging.info('Sending from normal to stealth address with two inputs:')
     opts = {'inputs': use_inputs}
-    txid_to_stealth = callcli(2, 'sendtypeto part part "{}" "{}"'.format(dumpje([{'address': sx_addr_2, 'amount': 1.2}]), dumpje(opts)))
+    txid_to_stealth = callcli(2, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': sx_addr_2, 'amount': 1.2}]), dumpje(opts)))
     logging.info('txid_to_stealth: {}'.format(txid_to_stealth))
     logging.info('Waiting for txid {} to be in mempool'.format(txid_to_stealth))
     waitForMempool(0, txid_to_stealth)
@@ -169,7 +169,7 @@ def doTest():
 
     logging.info('total: {}'.format(total))
     opts = {'inputs': use_inputs}
-    txid_to_cs = callcli(2, 'sendtypeto part part "{}" "{}"'.format(dumpje([{'address': big_addr_2, 'stakeaddress': addr_1_cs, 'amount': total, 'subfee': True}]), dumpje(opts)))
+    txid_to_cs = callcli(2, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': big_addr_2, 'stakeaddress': addr_1_cs, 'amount': total, 'subfee': True}]), dumpje(opts)))
     logging.info('txid_to_cs: {}'.format(txid_to_cs))
     logging.info('Waiting for txid {} to be in mempool'.format(txid_to_cs))
     waitForMempool(0, txid_to_cs)
@@ -206,7 +206,7 @@ def doTest():
 
     logging.info('Sending from coin received from anon:')
     opts = {'inputs': use_inputs}
-    txid_from_anon = callcli(2, 'sendtypeto part part "{}" "{}"'.format(dumpje([{'address': sx_addr_2, 'amount': 1.5}]), dumpje(opts)))
+    txid_from_anon = callcli(2, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': sx_addr_2, 'amount': 1.5}]), dumpje(opts)))
     logging.info('txid_from_anon: {}'.format(txid_from_anon))
     logging.info('Waiting for txid {} to be in mempool'.format(txid_from_anon))
     waitForMempool(0, txid_from_anon)
@@ -220,7 +220,7 @@ def doTest():
 
     logging.info('Sending from coin received from blind:')
     opts = {'inputs': use_inputs}
-    txid_from_blind = callcli(2, 'sendtypeto part part "{}" "{}"'.format(dumpje([{'address': sx_addr_2, 'amount': 1.6}]), dumpje(opts)))
+    txid_from_blind = callcli(2, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': sx_addr_2, 'amount': 1.6}]), dumpje(opts)))
     logging.info('txid_from_blind: {}'.format(txid_from_blind))
     logging.info('Waiting for txid {} to be in mempool'.format(txid_from_blind))
     waitForMempool(0, txid_from_blind)

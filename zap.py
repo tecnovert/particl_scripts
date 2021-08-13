@@ -298,12 +298,23 @@ class Zapper():
                 total_value += make_int(txo['amount'])
                 selected.append(txo)
 
-            if self.settings.nomix:
+            if self.settings.nomix or self.settings.addressgroupings:
                 return total_value, selected
         return total_value, selected
 
     def zap(self):
         utxos = self.callrpc('listunspent')
+
+        address_groups = {}
+        if self.settings.addressgroupings:
+            ags = self.callrpc('listaddressgroupings')
+            for ag in ags:
+                if len(ag) < 2:
+                    continue
+                grouping_name = 'group_{:03d}'.format(len(address_groups))
+                for a in ag:
+                    # [addr, balance]
+                    address_groups[a[0]] = grouping_name
 
         # Group by address
         group_totals = {}
@@ -315,7 +326,7 @@ class Zapper():
                 continue
             if not txo['desc'].startswith('pkh('):
                 continue
-            addr = txo['address']
+            addr = address_groups.get(txo['address'], txo['address'])
             if addr not in groups:
                 groups[addr] = []
 
@@ -407,6 +418,7 @@ def main():
     parser.add_argument('--maxvalue', dest='maxvalue', help='Maximum value of inputs to select (default=1000.0)', default='1000.0', required=False)
     parser.add_argument('--maxinputs', dest='maxinputs', help='Maximum number of inputs to select [1, 100] (default=20)', type=int, default=20, required=False)
     parser.add_argument('--nomix', dest='nomix', help='If true only inputs from the same address will be combined (default=false)', type=make_boolean, default=False, required=False)
+    parser.add_argument('--addressgroupings', dest='addressgroupings', help='If true only inputs from the same address grouping will be combined, see the listaddressgroupings RPC command (default=false)', type=make_boolean, default=False, required=False)
     parser.add_argument('--minwait', dest='minwait', help='Minimum number of seconds to wait before repeating [1, 3600] (default=1)', type=int, default=1, required=False)
     parser.add_argument('--maxwait', dest='maxwait', help='Maximum number of seconds to wait before repeating [1, 7200] (default=600)', type=int, default=600, required=False)
     parser.add_argument('--loop', dest='loop', help='Exit after creating first transaction if false (default=false)', type=make_boolean, default=True, required=False)
@@ -429,6 +441,8 @@ def main():
         raise argparse.ArgumentTypeError('Invalid minwait')
     if args.maxwait < args.minwait or args.maxwait > 7200:
         raise argparse.ArgumentTypeError('Invalid maxwait')
+    if args.addressgroupings and args.nomix:
+        raise argparse.ArgumentTypeError('Incompatible combination: --nomix, --addressgroupings')
 
     args.datadir = os.path.expanduser(args.datadir)
 

@@ -33,7 +33,7 @@ from util_tests import (
     waitForDaemonRpc, stakeBlocks, getInternalChain, waitForMempool)
 
 
-NUM_NODES = 3
+NUM_NODES = 4
 BASE_PORT = 14792
 BASE_RPC_PORT = 19792
 DEBUG_MODE = True
@@ -123,10 +123,11 @@ def doTest():
     stakeBlocks(0, 1, delay_event)
 
     datadir_2 = os.path.join(DATADIRS, '2')
+    datadir_3 = os.path.join(DATADIRS, '3')
 
     zap_path = os.path.join(PATH_TO_SCRIPT, 'zap.py')
 
-    logging.info('testing zap maxinputs=1...')
+    logging.info('Testing zap maxinputs=1...')
     ic_before = getInternalChain(2)
     args = [zap_path, '--loop=false', '--maxinputs=1', '--network=regtest', '--datadir', datadir_2, stake_addr]
     result = subprocess.run(args, capture_output=True)
@@ -141,7 +142,7 @@ def doTest():
     assert(len(tx['decoded']['vin']) == 1)
     assert(tx['decoded']['vout'][0]['scriptPubKey']['stakeaddresses'][0] == stake_addr)
 
-    logging.info('testing zap nomix=true...')
+    logging.info('Testing zap nomix=true...')
     args = [zap_path, '--loop=false', '--nomix=true', '--network=regtest', '--datadir', datadir_2, stake_addr]
     result = subprocess.run(args, capture_output=True)
 
@@ -152,7 +153,7 @@ def doTest():
     assert(len(tx['decoded']['vin']) == 1)
     assert(tx['decoded']['vout'][0]['scriptPubKey']['stakeaddresses'][0] == stake_addr)
 
-    logging.info('testing zap infer stakeaddress...')
+    logging.info('Testing zap infer stakeaddress...')
     r = callcli(2, 'walletsettings changeaddress "{}"'.format(dumpje({'coldstakingaddress': stake_addr_2})))
     args = [zap_path, '--loop=false', '--nomix=true', '--network=regtest', '--datadir', datadir_2]
     result = subprocess.run(args, capture_output=True)
@@ -164,7 +165,7 @@ def doTest():
     assert(len(tx['decoded']['vin']) == 1)
     assert(tx['decoded']['vout'][0]['scriptPubKey']['stakeaddresses'][0] == stake_addr_2)
 
-    logging.info('testing zap infer stakeaddress extaddress...')
+    logging.info('Testing zap infer stakeaddress extaddress...')
     expect_addr = callcli(2, 'deriverangekeys 0 0 {}'.format(stake_addr_ext))[0]
     callcli(2, 'walletsettings changeaddress "{}"'.format(dumpje({'coldstakingaddress': stake_addr_ext})))
     args = [zap_path, '--loop=false', '--nomix=true', '--network=regtest', '--datadir', datadir_2]
@@ -179,7 +180,7 @@ def doTest():
     r = callcli(2, 'extkey key {}'.format(stake_addr_ext))
     assert(int(r['num_derives']) == 1)
 
-    logging.info('testing zap testonly...')
+    logging.info('Testing zap testonly...')
     unspents_before = callcli(2, 'listunspent')
     assert(len(unspents_before) > 3)
     args = [zap_path, '--testonly=1', '--minwait=1', '--maxwait=1', '--maxinputs=3', '--network=regtest', '--datadir', datadir_2, stake_addr]
@@ -189,7 +190,7 @@ def doTest():
     created_txids = re.findall('Test tx: (.*?),', result.stdout.decode(), re.DOTALL)
     assert(len(created_txids) > 3)
 
-    logging.info('testing zap maxinputs=3...')
+    logging.info('Testing zap maxinputs=3...')
     args = [zap_path, '--minwait=1', '--maxwait=1', '--maxinputs=3', '--network=regtest', '--datadir', datadir_2, stake_addr]
     result = subprocess.run(args, capture_output=True)
 
@@ -198,6 +199,50 @@ def doTest():
     txid = sent_txids[0]
     tx = callcli(2, 'gettransaction {} true true'.format(txid))
     assert(len(tx['decoded']['vin']) == 3)
+
+    logging.info('Testing addressgroupings')
+    addr3 = []
+    for i in range(3):
+        addr3.append(callcli(3, 'getnewaddress'))
+
+    opts = {'show_hex': True, 'test_mempool_accept': True}
+    txres1 = callcli(0, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': addr3[0], 'amount': 0.1}]), dumpje(opts)))
+    txres2 = callcli(0, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': addr3[2], 'amount': 10.1}]), dumpje(opts)))
+    # Speed up mempool syncing
+    callcli(3, 'sendrawtransaction ' + txres1['hex'])
+    callcli(3, 'sendrawtransaction ' + txres2['hex'])
+
+    logging.info('Syncing mempool...')
+    txids = (txres1['txid'], txres2['txid'])
+    for txid in txids:
+        waitForMempool(3, txid, delay_event)
+
+    logging.info('Staking...')
+    stakeBlocks(0, 1, delay_event)
+
+    addr2 = callcli(2, 'getnewaddress')
+    txres1 = callcli(3, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': addr2, 'amount': 4}]), dumpje(opts)))
+    # Speed up mempool syncing
+    callcli(0, 'sendrawtransaction ' + txres1['hex'])
+    logging.info('Staking...')
+    stakeBlocks(0, 1, delay_event)
+
+    addressgroupings = callcli(3, 'listaddressgroupings')
+    assert(len(addressgroupings) == 2)
+    assert(len(addressgroupings[0]) == 2 or len(addressgroupings[1]) == 2)
+
+    args = [zap_path, '--minwait=1', '--maxwait=1', '--addressgroupings=true', '--network=regtest', '--datadir', datadir_3, stake_addr]
+    result = subprocess.run(args, capture_output=True)
+
+    sent_txids = re.findall('Sent tx: (.*?),', result.stdout.decode(), re.DOTALL)
+    assert(len(sent_txids) == 2)
+    txid = sent_txids[0]
+    tx = callcli(3, 'gettransaction {} true true'.format(txid))
+    assert(len(tx['decoded']['vin']) == 1)
+
+    txid = sent_txids[1]
+    tx = callcli(3, 'gettransaction {} true true'.format(txid))
+    assert(len(tx['decoded']['vin']) == 1)
 
     logging.info('Test Passed!')
 
@@ -247,6 +292,7 @@ def runTest(resetData):
     callcli(0, 'extkeygenesisimport "abandon baby cabbage dad eager fabric gadget habit ice kangaroo lab absorb"')
     callcli(1, 'extkeyimportmaster "pact mammal barrel matrix local final lecture chunk wasp survey bid various book strong spread fall ozone daring like topple door fatigue limb olympic" "" false "Master Key" "Default Account" 0 "{\\"createextkeys\\": 1}"')
     callcli(2, 'extkeyimportmaster "sección grito médula hecho pauta posada nueve ebrio bruto buceo baúl mitad"')
+    callcli(3, 'extkeyimportmaster "graine article givre hublot encadrer admirer stipuler capsule acajou paisible soutirer organe"')
 
     try:
         doTest()
