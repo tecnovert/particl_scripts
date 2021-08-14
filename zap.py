@@ -287,6 +287,7 @@ class Zapper():
             while True:
                 if len(txos) < 1:
                     del groups[addr]
+                    del group_totals[addr]
                     break
                 if len(selected) >= self.settings.maxinputs or \
                    total_value >= self.settings.maxvalue:

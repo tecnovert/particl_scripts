@@ -12,6 +12,8 @@ export PARTICL_BINDIR=/tmp/partbuild/src; python3 test_zap.py
 
 export PERSIST=1
 export EXTRA_CONFIG_JSON="{\"1\":[\"zmqpubhashblock=tcp://127.0.0.1:36750\",\"zmqpubsmsg=tcp://127.0.0.1:36750\",\"zmqpubhashtx=tcp://127.0.0.1:36750\"]}"
+export PARTICL_BINDIR=~/tmp/particl-0.19.2.13/bin/; python3 test_zap.py
+yarn run start:electron:fast -regtest -datadir=/tmp/parttest/1/ -rpcport=19793 -rpcuser=test -rpcpassword=test
 """
 
 import os
@@ -247,6 +249,14 @@ def doTest():
     logging.info('Test Passed!')
 
     if PERSIST:
+
+        outputs = []
+        addrs_1 = []
+        for i in range(100):
+            addrs_1.append(callcli(1, 'getnewaddress'))
+            outputs.append({'address': addrs_1[-1], 'amount': format8(random.randint(0.001 * COIN, 2 * COIN))})
+        txres1 = callcli(0, 'sendtypeto part part "{}"'.format(dumpje(outputs)))
+
         callcli(0, 'reservebalance false')
         callcli(0, 'walletsettings stakelimit "%s"' % (dumpje({'height': 0})))
         extkey2 = callcli(2, 'getnewextaddress staketest')
