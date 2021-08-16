@@ -22,6 +22,9 @@ Once a transaction has been created the script will wait for a random
 interval between "minwait" and "maxwait" seconds and repeat until no
 unspent p2pkh outputs are found.
 
+The wallet must remain unlocked while the script is running.
+
+
 Quit with ctrl + c
 
 Examples:
@@ -331,14 +334,14 @@ class Zapper():
             if addr not in groups:
                 groups[addr] = []
 
-            # Sort from smallest to largest
-            found = False
+            # Sort from largest to smallest, selectInputs pops the list
+            inserted = False
             for i in range(len(groups[addr])):
-                if make_int(txo['amount']) <= make_int(groups[addr][i]['amount']):
+                if make_int(txo['amount']) >= make_int(groups[addr][i]['amount']):
                     groups[addr].insert(i, txo)
-                    found = True
+                    inserted = True
                     break
-            if not found:  # Was not inserted
+            if not inserted:
                 groups[addr].append(txo)
             group_totals[addr] = group_totals.get(addr, 0) + make_int(txo['amount'])
 
