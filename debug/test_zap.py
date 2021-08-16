@@ -251,9 +251,11 @@ def doTest():
     if PERSIST:
         outputs = []
         addrs_1 = []
-        for i in range(100):
+        for i in range(80):
             addrs_1.append(callcli(1, 'getnewaddress'))
             outputs.append({'address': addrs_1[-1], 'amount': format8(random.randint(0.001 * COIN, 2 * COIN))})
+        for i in range(20):
+            outputs.append({'address': addrs_1[i % 4], 'amount': format8(random.randint(0.001 * COIN, 2 * COIN))})
         txres1 = callcli(0, 'sendtypeto part part "{}"'.format(dumpje(outputs)))
 
         outputs = []
@@ -261,6 +263,8 @@ def doTest():
         for i in range(50):
             addrs_3.append(callcli(3, 'getnewaddress'))
             outputs.append({'address': addrs_3[-1], 'amount': format8(random.randint(0.001 * COIN, 2 * COIN))})
+        for i in range(30):
+            outputs.append({'address': addrs_3[i % 10], 'amount': format8(random.randint(0.001 * COIN, 2 * COIN))})
         txres2 = callcli(0, 'sendtypeto part part "{}"'.format(dumpje(outputs)))
 
         callcli(3, 'walletsettings changeaddress "{}"'.format(dumpje({'coldstakingaddress': stake_addr_ext})))
