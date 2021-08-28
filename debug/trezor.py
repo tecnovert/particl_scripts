@@ -107,6 +107,14 @@ def doTest():
     addr_2_a = callcli(2, 'getnewaddress normal_address_to_receive_from_anon')
     addr_1_cs = callcli(1, 'getnewaddress normal_address_for_coldstaking')
     addr_1_cs = callcli(1, 'validateaddress {} true'.format(addr_1_cs))['stakeonly_address']
+
+    # getnewstealthaddress should fail
+    try:
+        sxaddr = callcli(2, 'getnewstealthaddress')
+        assert False, 'getnewstealthaddress should fail'
+    except Exception as e:
+        assert('NewStealthKeyFromAccount failed' in str(e))
+
     sx_addr_2 = callcli(2, 'devicegetnewstealthaddress stealth_v2_address')
     big_addr_2 = callcli(2, 'getnewaddress 256bit_address false false true')
     addr_1 = callcli(1, 'getnewaddress ')
@@ -224,6 +232,42 @@ def doTest():
     logging.info('txid_from_blind: {}'.format(txid_from_blind))
     logging.info('Waiting for txid {} to be in mempool'.format(txid_from_blind))
     waitForMempool(0, txid_from_blind)
+
+    logging.info('Testing receiving on stealth address from locked wallet')
+    balances_before = callcli(2, 'getbalances')
+    logging.info('Encrypting wallet')
+    callcli(2, 'encryptwallet testpass')
+    txid = callcli(1, 'sendtoaddress {} 10'.format(sx_addr_2))
+    logging.info('txid: {}'.format(txid))
+    tx = callcli(1, 'gettransaction {}'.format(txid))
+    callcli(0, 'sendrawtransaction {}'.format(tx['hex']))
+    waitForMempool(0, txid)
+    logging.info('Staking')
+    stakeBlocks(0, 1, delay_event)
+    balances_after = callcli(2, 'getbalances')
+
+    logging.info('Trusted before {}, after: {}'.format(balances_before['mine']['trusted'], balances_after['mine']['trusted']))
+    assert(balances_after['mine']['trusted'] == balances_before['mine']['trusted'] + 10.0)
+
+    unspent = callcli(2, 'listunspent 0 9999999 \"[]\" true')
+    use_inputs = []
+    for utxo in unspent:
+        if utxo['txid'] == txid:
+            use_inputs.append({'tx': utxo['txid'], 'n': utxo['vout']})
+    assert(len(use_inputs) == 1)
+    opts = {'inputs': use_inputs}
+
+    logging.info('Testing sending from sx received while encrypted')
+    try:
+        txid_while_encrypted = callcli(2, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': sx_addr_0, 'amount': 1.7}]), dumpje(opts)))
+        assert False, 'sendtypeto while locked should fail'
+    except Exception as e:
+        assert('Wallet locked' in str(e))
+    callcli(2, 'walletpassphrase testpass 60')
+
+    txid_while_encrypted = callcli(2, 'sendtypeto part part "{}" "" "" 5 1 false "{}"'.format(dumpje([{'address': sx_addr_0, 'amount': 1.7}]), dumpje(opts)))
+    logging.info('txid_while_encrypted: {}'.format(txid_while_encrypted))
+    waitForMempool(0, txid_while_encrypted)
 
     logging.info('Test Passed!')
 
