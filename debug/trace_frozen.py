@@ -62,7 +62,6 @@ def main():
     print('Use anon spend keys', use_anon_spend_keys)
     print('Persistent data path', persistent_data_file_in)
 
-
     spent_anon_inputs = {}
     blacklisted_aos = []
     if os.path.exists(persistent_data_file):
@@ -233,7 +232,6 @@ def main():
             print('\tinput for ', spending_txid)
         print('\ttotal_in', total_in)
         print('\ttotal_out', total_out)
-
 
         num_outputs = sum(outputs_by_type.values())
         num_known_outputs = len(known_output_values)

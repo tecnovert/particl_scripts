@@ -7,7 +7,7 @@
 
 """
 
-~/tmp/particl-0.19.2.12/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.15/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 
 rm -r /tmp/anon_stats || true
 mkdir -p /tmp/anon_stats
@@ -35,7 +35,6 @@ from util import (
     open_rpc)
 
 
-DEBUG = True
 MAX_MONEY = 21000000 * COIN
 chain_stats = None
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(message)s')
@@ -115,7 +114,6 @@ class ChainTracker():
 
         self.particl_data_dir = os.path.expanduser(settings['data_dir'])
         self.chain = settings.get('chain', '')
-        self.debug = settings.get('chain', DEBUG)
 
         self.processed_height = settings.get('fromheight', 0)
         self.totime = settings.get('totime', 0)
@@ -250,7 +248,6 @@ class ChainTracker():
         for txh in block['tx']:
             # TODO: Add ring_row_ to tx output in getblock
             tx = self.callrpc('getrawtransaction', [txh, True])
-            #print('tx', json.dumps(tx, indent=4))
 
             num_blinded_in = 0
             num_blinded_out = 0
@@ -268,11 +265,8 @@ class ChainTracker():
             new_blind_outputs = {}
             max_possible_blinded_value_in = 0  # TODO: reduce max when multiple blind inputs have the same txid and spend all outputs from there
             for txi_n, tx_input in enumerate(tx['vin']):
-                #print('tx_input', json.dumps(tx_input, indent=4))
                 if 'coinbase' in tx_input:
                     continue
-                #if 'txid' in tx_input and tx_input['txid'] == '0000000000000000000000000000000000000000000000000000000000000000':
-                #    continue  # Coinbase
                 if 'type' in tx_input and tx_input['type'] == 'anon':
                     num_anon_in += 1
 
@@ -324,7 +318,6 @@ class ChainTracker():
                                                (txh, tx_input['txid'], tx_input['vout']))
 
             for tx_out in tx['vout']:
-                #print(tx_out)
                 tx_out_type = tx_out['type']
                 if tx_out_type == 'anon':
                     num_anon_out += 1
@@ -691,6 +684,8 @@ def main():
         knowninfodir = settings['knowninfodir']
         files = os.listdir(knowninfodir)
         for f in files:
+            if os.path.isdir(os.path.join(knowninfodir, f)):
+                continue
             known_txids = []
             known_aos = {}
 

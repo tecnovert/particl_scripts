@@ -13,18 +13,15 @@ export PARTICL_BINDIR=/tmp/partbuild/src; python3 test_coldstaking_restore.py
 """
 
 import os
-import re
 import sys
 import json
-import random
 import shutil
 import signal
 import logging
 import threading
 import traceback
-import subprocess
 from contrib.rpcauth import generate_salt, password_to_hmac
-from util import dumpje, format8, COIN
+from util import dumpje
 from util_tests import (
     DATADIRS, PARTICL_BINDIR, startDaemon, callcli,
     waitForDaemonRpc, stakeBlocks, getInternalChain, waitForMempool)

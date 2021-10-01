@@ -18,7 +18,7 @@ Verifies
  - Keyimages are not reused.
  - Unknown input amounts are feasible when compared against accumulated chain info.
 
-~/tmp/particl-0.19.2.11/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.13/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 ./particl-cli -rpcwallet=wallet.dat debugwallet "{\"trace_frozen_outputs\":true}"  > ~/trace_wallets.txt
 $ python trace_frozen_inplace.py ~/.particl ~/trace_wallets.txt
 
@@ -401,7 +401,6 @@ def main():
             for output in pair[1]:
                 vout, output_type, anon_index, value = output
                 fp.write('{},{},{},{},{},{}\n'.format(claim_id, pair[0], vout, anon_index, value, 'No'))
-
 
     with open(persistent_data_file, 'w') as fp:
         json_data = {'spent_anon_inputs': spent_anon_inputs,
