@@ -267,7 +267,7 @@ class ChainApp():
                     self.claimed_blind_outs[p].spent_txid = txh
 
                 if prevout_type == 'blind':
-                    print('prev_tx', json.dumps(prev_tx, indent=4))
+                    #print('prev_tx', json.dumps(prev_tx, indent=4))
                     num_blinded_in += 1
 
                     if prev_tx['height'] < self.exploit_fix_2_height:
@@ -286,7 +286,7 @@ class ChainApp():
 
             if num_anon_in > 0:
                 for ring in rsi:
-                    print('ring_members', ring_members)
+                    #print('ring_members', ring_members)
                     for ring_members in ring[2]:
                         ais = ring_members.split(',')
                         for ai in ais:
@@ -340,7 +340,7 @@ class ChainApp():
                     self.num_post_fork_anon_txns += 1
 
             if num_blinded_in > 0:
-                print('num_blinded_in', num_blinded_in)
+                #print('num_blinded_in', num_blinded_in)
                 assert(not(spends_post_fork and spends_pre_fork))
                 if spends_pre_fork:
                     logging.info('unfreeze_blind_tx: {}, {}, height: {}'.format(txh, total_plain_out, height))

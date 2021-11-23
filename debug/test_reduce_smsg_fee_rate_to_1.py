@@ -29,22 +29,19 @@ smsggetfeerate 235
 """
 
 import os
-import re
 import sys
 import json
-import random
 import shutil
 import signal
 import logging
 import threading
 import traceback
-import subprocess
 from contrib.rpcauth import generate_salt, password_to_hmac
-from util import dumpje, format8, COIN
+from util import dumpje
 from distutils.util import strtobool
 from util_tests import (
     DATADIRS, PARTICL_BINDIR, startDaemon, callcli,
-    waitForDaemonRpc, stakeBlocks, getInternalChain, waitForMempool)
+    waitForDaemonRpc)
 
 
 NUM_NODES = 4
@@ -148,9 +145,7 @@ def doTest():
         if change_dir and num_200 > 10:
             return True
 
-
         delay_event.wait(20)
-
 
 
 def runTest(resetData):
