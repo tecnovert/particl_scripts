@@ -7,12 +7,12 @@
 
 """
 
-export PARTICL_BINDIR=~/tmp/particl-0.19.2.13/bin/; python3 test_zap.py
+export PARTICL_BINDIR=~/tmp/particl-0.19.2.17/bin/; python3 test_zap.py
 export PARTICL_BINDIR=/tmp/partbuild/src; python3 test_zap.py
 
 export PERSIST=1
 export EXTRA_CONFIG_JSON="{\"1\":[\"zmqpubhashblock=tcp://127.0.0.1:36750\",\"zmqpubsmsg=tcp://127.0.0.1:36750\",\"zmqpubhashtx=tcp://127.0.0.1:36750\"]}"
-export PARTICL_BINDIR=~/tmp/particl-0.19.2.13/bin/; python3 test_zap.py
+export PARTICL_BINDIR=~/tmp/particl-0.19.2.17/bin/; python3 test_zap.py
 yarn run start:electron:fast -regtest -datadir=/tmp/parttest/1/ -rpcport=19793 -rpcuser=test -rpcpassword=test
 """
 

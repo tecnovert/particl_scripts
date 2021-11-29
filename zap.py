@@ -375,6 +375,9 @@ class Zapper():
                     spend_address = internal_chain
                 break
 
+        addressinfo = self.callrpc('getaddressinfo', [spend_address])
+        assert(addressinfo['ismine'] == True), 'Unowned spendaddress'
+
         cc_inputs = []
         for tx in inputs:
             if self.settings.testonly:
