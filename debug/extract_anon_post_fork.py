@@ -9,7 +9,7 @@
 
 Extract the values of unfrozen pre-fork anon outputs.
 
-~/tmp/particl-0.19.2.16/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
+~/tmp/particl-0.19.2.18/bin/particl-qt -txindex=1 -server -printtoconsole=0 -nodebuglogfile
 
 rm -r /tmp/anon_post_fork || true
 mkdir -p /tmp/anon_post_fork

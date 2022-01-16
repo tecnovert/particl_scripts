@@ -136,7 +136,6 @@ def doTest():
 
     print('node2_peers', json.dumps(node2_peers, indent=4))
 
-
     print('wallet info 1', json.dumps(callcli(1, 'getwalletinfo'), indent=4))
     print('wallet info 2', json.dumps(callcli(2, 'getwalletinfo'), indent=4))
 

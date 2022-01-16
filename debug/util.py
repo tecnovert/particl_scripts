@@ -45,6 +45,28 @@ def b58decode(v, length=None):
     return result
 
 
+def b58encode(v):
+    long_value = 0
+    for (i, c) in enumerate(v[::-1]):
+        long_value += (256**i) * c
+
+    result = ''
+    while long_value >= 58:
+        div, mod = divmod(long_value, 58)
+        result = __b58chars[mod] + result
+        long_value = div
+    result = __b58chars[long_value] + result
+
+    # leading 0-bytes in the input become leading-1s
+    nPad = 0
+    for c in v:
+        if c == 0:
+            nPad += 1
+        else:
+            break
+    return (__b58chars[0] * nPad) + result
+
+
 def jsonDecimal(obj):
     if isinstance(obj, decimal.Decimal):
         return str(obj)
