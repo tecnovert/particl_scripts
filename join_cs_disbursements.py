@@ -8,7 +8,7 @@
 """
 Collect coldstaking disbursements in larger outputs
 
-$ export BIN_PATH=~/tmp/particl-0.21.2.4/bin
+$ export BIN_PATH=~/tmp/particl-0.21.2.6/bin
 $ ${BIN_PATH}/particl-qt -server -testnet
 $ python join_cs_disbursements.py --network=testnet --wallet=main_testnet_wallet.dat
 """
