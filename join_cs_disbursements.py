@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# Copyright (c) 2020-2021 tecnovert
+# Copyright (c) 2020-2022 tecnovert
 # Distributed under the MIT software license, see the accompanying
 # file LICENSE or http://www.opensource.org/licenses/mit-license.php.
 
@@ -13,7 +13,7 @@ $ ${BIN_PATH}/particl-qt -server -testnet
 $ python join_cs_disbursements.py --network=testnet --wallet=main_testnet_wallet.dat
 """
 
-__version__ = '0.1'
+__version__ = '0.2'
 
 import os
 import json
@@ -33,6 +33,10 @@ COIN = 100000000
 low_filter = 100.0
 high_filter = 2000.0
 utxo_limit = 60
+
+
+class SkipIteration(Exception):
+    pass
 
 
 def dquantize(n, places=8):
@@ -155,30 +159,42 @@ def main():
     parser.add_argument('--minwait', dest='minwait', help='Minimum number of seconds to wait before repeating [1, 3600] (default=60)', type=int, default=60, required=False)
     parser.add_argument('--maxwait', dest='maxwait', help='Maximum number of seconds to wait before repeating [1, 7200] (default=600)', type=int, default=600, required=False)
     parser.add_argument('--testonly', dest='testonly', help='If true sendtypeto command will not be run on daemon (default=false)', type=make_boolean, default=False, required=False)
+    parser.add_argument('--minblockdiff', dest='minblockdiff', help='Minimum number of blocks to wait before repeating [0, 600] (default=1)', type=int, default=1, required=False)
     args = parser.parse_args()
 
     if args.minwait < 1 or args.minwait > 3600:
         raise argparse.ArgumentTypeError('Invalid minwait')
     if args.maxwait < args.minwait or args.maxwait > 7200:
         raise argparse.ArgumentTypeError('Invalid maxwait')
+    if args.minblockdiff < 0 or args.minblockdiff > 600:
+        raise argparse.ArgumentTypeError('Invalid minblockdiff')
 
     print('network', 'mainnet' if args.network == '' else args.network)
 
     delay_event = threading.Event()
 
+    last_height = 0
     while True:
         data = json.loads(callrpc('listunspent', args.network, args.wallet))
 
         try:
+            height = int(callrpc('getblockcount', args.network, args.wallet))
+            if height - last_height < args.minblockdiff:
+                print('Blocks since last payout less than minblockdiff setting:', height - last_height)
+                raise SkipIteration
             cmd = get_sendcmd(data)
+            print('\nChain Height', height)
+            print('Command', cmd)
+            last_height = height
             if not args.testonly:
                 callrpc(cmd, args.network, args.wallet)
-            print('\nCmd', cmd)
+        except SkipIteration:
+            pass
         except Exception as e:
             print('Error', e)
 
         wait_for = random.randint(args.minwait, args.maxwait)
-        print('waiting for {} seconds'.format(wait_for))
+        print('Waiting for {} seconds'.format(wait_for))
         delay_event.wait(wait_for)
 
     print('Done.')
