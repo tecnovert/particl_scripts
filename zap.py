@@ -376,7 +376,7 @@ class Zapper():
                 break
 
         addressinfo = self.callrpc('getaddressinfo', [spend_address])
-        assert(addressinfo['ismine'] == True), 'Unowned spendaddress'
+        assert(addressinfo['ismine'] is True), 'Unowned spendaddress'
 
         cc_inputs = []
         for tx in inputs:

@@ -109,7 +109,7 @@ def doTest():
     sxaddr2 = callcli(2, 'getnewstealthaddress')
     logging.info(callcli(2, 'walletlock'))
 
-    outputs = [{'address': sxaddr2, 'amount': 1.0},]
+    outputs = [{'address': sxaddr2, 'amount': 1.0}, ]
     txid = callcli(1, 'sendtypeto part anon "{}"'.format(dumpje(outputs)))
 
     logging.info('waiting for mempool txid: {}'.format(txid))
@@ -119,7 +119,7 @@ def doTest():
     waitForHeight(2, 1, delay_event)
 
     rv = callcli(2, 'filtertransactions')
-    logging.info('filtertransactions 2: {}'.format(rv, indent=4))
+    logging.info('filtertransactions 2: {}'.format(json.dumps(rv, indent=4)))
 
     callcli(2, 'walletpassphrase "{}" 60'.format(password2))
     logging.info('debugwallet 2: {}'.format(json.dumps(callcli(2, 'debugwallet'), indent=4)))
@@ -139,7 +139,7 @@ def doTest():
         txids.append(callcli(1, 'sendtypeto part anon "{}"'.format(dumpje(outputs))))
 
     callcli(2, 'walletpassphrase "{}" 160'.format(password2))
-    outputs = [{'address': sxaddr2, 'amount': 1.0},]
+    outputs = [{'address': sxaddr2, 'amount': 1.0}, ]
     txids.append(callcli(1, 'sendtypeto part anon "{}"'.format(dumpje(outputs))))
 
     logging.info('waiting for mempool')
@@ -163,7 +163,7 @@ def doTest():
         logging.info('staking')
         stakeBlocks(0, 1, delay_event)
 
-    outputs = [{'address': sxaddr2, 'amount': 2.0, 'subfee': True},]
+    outputs = [{'address': sxaddr2, 'amount': 2.0, 'subfee': True}, ]
     txid = callcli(2, 'sendtypeto anon anon "{}" "" "" 5'.format(dumpje(outputs)))
 
     logging.info('waiting for mempool txid: {}'.format(txid))

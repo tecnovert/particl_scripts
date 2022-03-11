@@ -185,3 +185,7 @@ def dquantize(n, places=8):
 
 def make_int(v):
     return int(dquantize(decimal.Decimal(v) * DCOIN).quantize(decimal.Decimal(1)))
+
+
+def strtobool(s):
+    return s.lower() in ['1', 'true']
