@@ -291,6 +291,18 @@ def doTest():
     callcli(3, '-rpcwallet={} extkeyimportmaster "{}"'.format('coldwallet', m1))
     callcli(3, '-rpcwallet={} extkeyimportmaster "{}"'.format('hotwallet', m2))
 
+    logging.info('Creating anon outputs')
+    txids = []
+    sxaddr1 = callcli(1, 'getnewstealthaddress')
+    for i in range(20):
+        outputs = [{'address': sxaddr1, 'amount': 1.0}]
+        txids.append(callcli(1, 'sendtypeto part anon "{}"'.format(dumpje(outputs))))
+    outputs = [{'address': sxaddr1, 'amount': 10.0}]
+    txids.append(callcli(1, 'sendtypeto part blind "{}"'.format(dumpje(outputs))))
+    logging.info('waiting for mempool')
+    for txid in txids:
+        waitForMempool(0, txid, delay_event)
+
     # Get address in stakeonly encoding
     addr_node3_cs = callcli(3, '-rpcwallet={} getnewaddress "{}"'.format('hotwallet', 'addr256_node2_cs'))
     validateaddress_addr_node3_cs = callcli(3, '-rpcwallet={} validateaddress "{}" true'.format('hotwallet', addr_node3_cs))
@@ -525,7 +537,6 @@ def doTest():
 
     rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
     txid = rv.stdout.strip().decode('utf-8')
-
     waitForElectrumTXO(txid)
 
     rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
@@ -534,6 +545,51 @@ def doTest():
     assert(len(data) == 1)
     assert('spend_address' not in data[0])
     assert('stake_address' not in data[0])
+
+    logging.info('Test spending A->P outputs')
+    outputs = [{'address': electrum_addr0, 'amount': 5.0}]
+    txid = callcli(1, 'sendtypeto {} {} "{}" "" "" 5 1'.format('anon', 'part', dumpje(outputs)))
+    logging.info('sent to electrum_addr0: {}'.format(txid))
+
+    waitForElectrumTXO(txid)
+
+    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
+    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    assert(len(data) == 2)
+
+    rv = subprocess.run(electrum_bin + ' getunusedaddress', capture_output=True, shell=True)
+    electrum_addr1 = rv.stdout.strip().decode('utf-8')
+    rv = subprocess.run(electrum_bin + f' payto {electrum_addr1} !', capture_output=True, shell=True)
+    txhex = rv.stdout.strip().decode('utf-8')
+
+    txdecoded = callcli(2, f'decoderawtransaction {txhex}')
+    assert(len(txdecoded['vin']) == 2)
+
+    rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
+    txid = rv.stdout.strip().decode('utf-8')
+    waitForElectrumTXO(txid)
+
+    logging.info('Test spending B->P outputs')
+    outputs = [{'address': electrum_addr0, 'amount': 5.0}]
+    txid = callcli(1, 'sendtypeto {} {} "{}" "" "" 5 1'.format('blind', 'part', dumpje(outputs)))
+    logging.info('sent to electrum_addr0: {}'.format(txid))
+
+    waitForElectrumTXO(txid)
+
+    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
+    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    assert(len(data) == 2)
+
+    rv = subprocess.run(electrum_bin + f' payto {electrum_addr1} !', capture_output=True, shell=True)
+    txhex = rv.stdout.strip().decode('utf-8')
+
+    txdecoded = callcli(2, f'decoderawtransaction {txhex}')
+    assert(len(txdecoded['vin']) == 2)
+
+    rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
+    txid = rv.stdout.strip().decode('utf-8')
+    waitForElectrumTXO(txid)
+
 
     if PERSIST:
         callcli(0, 'reservebalance false')
