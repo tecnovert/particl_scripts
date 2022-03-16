@@ -8,7 +8,7 @@
 """
 Collect coldstaking disbursements in larger outputs
 
-$ export BIN_PATH=~/tmp/particl-0.21.2.6/bin
+$ export BIN_PATH=~/tmp/particl-0.21.2.7/bin
 $ ${BIN_PATH}/particl-qt -server -testnet
 $ python join_cs_disbursements.py --network=testnet --wallet=main_testnet_wallet.dat
 """
@@ -36,6 +36,10 @@ utxo_limit = 60
 
 
 class SkipIteration(Exception):
+    pass
+
+
+class NoneOutstanding(Exception):
     pass
 
 
@@ -137,7 +141,7 @@ def get_sendcmd(data):
 
             cmd += ']}"'
             return cmd
-    raise ValueError('Nothing to do')
+    raise NoneOutstanding
 
 
 def make_boolean(v):
@@ -188,6 +192,8 @@ def main():
             last_height = height
             if not args.testonly:
                 callrpc(cmd, args.network, args.wallet)
+        except NoneOutstanding:
+            print('Nothing to do.')
         except SkipIteration:
             pass
         except Exception as e:
