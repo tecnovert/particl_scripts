@@ -10,9 +10,9 @@ Count txns per day by type.
 A transaction is counted as blind or anon if it has atleast one nonstandard output or input.
 A standard output has only standard outputs and inputs.
 
-$ export BIN_PATH=~/tmp/particl-0.21.2.6/bin
+$ export BIN_PATH=~/tmp/particl-0.21.2.7/bin
 $ ${BIN_PATH}/particl-qt -server -txindex=1 -testnet
-$ python count_txns.py --network=testnet --days=14
+$ python count_txns.py --days=14 --network=testnet
 
 """
 
@@ -30,10 +30,12 @@ import subprocess
 bin_path = os.path.join(os.path.expanduser(os.getenv('BIN_PATH', '')), 'particl-cli')
 
 
-def callrpc(cmd, network='', wallet=''):
+def callrpc(cmd, datadir=None, network=None, wallet=None):
     args = [bin_path, ]
 
-    if network:
+    if datadir:
+        args += ['--datadir=' + datadir, ]
+    if network and network != 'mainnet':
         args += ['--' + network, ]
     if wallet:
         args += ['--rpcwallet=' + wallet, ]
@@ -49,21 +51,37 @@ def callrpc(cmd, network='', wallet=''):
     return out[0]
 
 
+def make_rpc_func(datadir, network, wallet=None):
+    datadir = datadir
+    network = network
+    wallet = wallet
+
+    def rpc_func(cmd, wallet_override=None):
+        nonlocal network, datadir, wallet
+        return callrpc(cmd, datadir, network, wallet if wallet_override is None else wallet_override)
+    return rpc_func
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-v', '--version', action='version',
                         version='%(prog)s {version}'.format(version=__version__))
     parser.add_argument('--network', dest='network', default='')
+    parser.add_argument('--datadir', dest='datadir', help='Particl datadir (default=~/.particl)', default='~/.particl', required=False)
     parser.add_argument('--days', dest='days', help='Number of days to count back', type=int, default=7, required=False)
     parser.add_argument('--starthash', dest='starthash', help='Block hash to start from', default='', required=False)
     args = parser.parse_args()
 
+    args.datadir = os.path.expanduser(args.datadir)
+
     print('network', 'mainnet' if args.network == '' else args.network)
+
+    callrpc = make_rpc_func(args.datadir, args.network)
 
     delay_event = threading.Event()
 
     if args.starthash == '':
-        block_hash = callrpc('getbestblockhash', args.network).strip().decode('utf8')
+        block_hash = callrpc('getbestblockhash').strip().decode('utf8')
     else:
         block_hash = args.starthash
 
@@ -90,7 +108,7 @@ def main():
     last_date = ''
 
     while True:
-        block_data = json.loads(callrpc(f'getblock {block_hash} 2', args.network))
+        block_data = json.loads(callrpc(f'getblock {block_hash} 2'))
 
         date = time.strftime('%Y-%m-%d', time.gmtime(int(block_data['time'])))
         if last_date != '' and date != last_date:
