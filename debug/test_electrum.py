@@ -277,6 +277,17 @@ def waitForElectrumTXO(txid):
     raise ValueError('waitForElectrumTXO timed out')
 
 
+def make_electrum_cli_func(electrum_bin):
+    electrum_bin = electrum_bin
+    def cli_func(cmd):
+        nonlocal electrum_bin
+        rv = subprocess.run(electrum_bin + ' ' + cmd, capture_output=True, shell=True)
+        if rv.returncode != 0:
+            raise ValueError('stderr: ' + rv.stderr.decode('utf-8'))
+        return rv.stdout.strip().decode('utf-8')
+    return cli_func
+
+
 def doTest():
 
     m1 = callcli(3, 'mnemonic new')['mnemonic']
@@ -312,10 +323,12 @@ def doTest():
     electrum_dir = os.path.join(DATADIRS, str(1), 'electrum')
     electrum_bin = ELECTRUM_SRC_DIR + 'electrum-env --regtest -vdebug -D {}'.format(electrum_dir)
 
+    electrum_cli = make_electrum_cli_func(electrum_bin)
+
     logging.info('Setting electrum coldstakingchangeaddress')
-    subprocess.run(electrum_bin + f' cs_set_stakechangeaddress "{addr_cs_stake}"', capture_output=True, shell=True)
-    rv = subprocess.run(electrum_bin + ' cs_view_stakechangeaddress', capture_output=True, shell=True)
-    assert(rv.stdout.strip().decode('utf-8') == addr_cs_stake)
+    electrum_cli(f'cs_set_stakechangeaddress "{addr_cs_stake}"')
+    rv = electrum_cli('cs_view_stakechangeaddress')
+    assert(rv == addr_cs_stake)
 
     addr256_node2 = callcli(2, 'getnewaddress "{}" {} {} {}'.format('256bit addr', 'false', 'false', 'true'))
     extaddr_hotwallet = callcli(3, '-rpcwallet={} getnewextaddress "{}"'.format('hotwallet', 'coldstaking addr'))
@@ -329,16 +342,11 @@ def doTest():
     assert(addr_info_addr256_node2_2['pubkey'] == addr_info_addr_p2pkh['pubkey'])
 
     logging.info('Test electrum shows the correct 256bit address version')
-    electrum_dir = os.path.join(DATADIRS, str(1), 'electrum')
-    electrum_bin = ELECTRUM_SRC_DIR + 'electrum-env --regtest -vdebug -D {}'.format(electrum_dir)
-
-    rv = subprocess.run(electrum_bin + f' cs_show_256bit_address "{addr_p2pkh}"', capture_output=True, shell=True)
-    electrum_addr0_256 = rv.stdout.strip().decode('utf-8')
+    electrum_addr0_256 = electrum_cli(f'cs_show_256bit_address "{addr_p2pkh}"')
     assert(electrum_addr0_256 == addr256_node2_2)
     logging.info(electrum_addr0_256)
 
-    rv = subprocess.run(electrum_bin + ' getunusedaddress', capture_output=True, shell=True)
-    electrum_addr0 = rv.stdout.strip().decode('utf-8')
+    electrum_addr0 = electrum_cli('getunusedaddress')
 
     stakeBlocks(0, 1, delay_event)
 
@@ -351,8 +359,7 @@ def doTest():
     waitForElectrumBalance(100.0)
 
     logging.info('electrum listunspent after receiving on standard address')
-    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    data = json.loads(electrum_cli('listunspent'))
     logging.info(json.dumps(data, indent=4))
     assert(len(data) == 1)
 
@@ -363,9 +370,7 @@ def doTest():
 
     addr1 = callcli(1, 'getnewaddress')
 
-    rv = subprocess.run(electrum_bin + f' payto {addr1} 0.1', capture_output=True, shell=True)
-    txhex = rv.stdout.strip().decode('utf-8')
-
+    txhex = electrum_cli(f'payto {addr1} 0.1')
     txdecoded = callcli(2, f'decoderawtransaction {txhex}')
     assert(len(txdecoded['vout']) == 2)
     cs_utxo = None
@@ -376,22 +381,16 @@ def doTest():
 
     logging.info('Decoded utxo {}'.format(json.dumps(cs_utxo, indent=4)))
 
-    rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
-    txid = rv.stdout.strip().decode('utf-8')
-
+    txid = electrum_cli(f'broadcast {txhex}')
     waitForElectrumTXO(txid)
 
-    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
-
+    data = json.loads(electrum_cli('listunspent'))
     assert(data[0]['spend_address'] == cs_utxo['scriptPubKey']['addresses'][0])
     assert(data[0]['stake_address'] == addr_cs_stake)
 
     logging.info('Confirm coldstaking outputs can be spent')
     old_cs_utxo = cs_utxo
-    rv = subprocess.run(electrum_bin + f' payto {addr1} 0.1', capture_output=True, shell=True)
-    txhex = rv.stdout.strip().decode('utf-8')
-
+    txhex = electrum_cli(f'payto {addr1} 0.1')
     txdecoded = callcli(2, f'decoderawtransaction {txhex}')
     assert(len(txdecoded['vout']) == 2)
     cs_utxo = None
@@ -400,14 +399,10 @@ def doTest():
             cs_utxo = utxo
             break
 
-    rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
-    txid = rv.stdout.strip().decode('utf-8')
-
+    txid = electrum_cli(f'broadcast {txhex}')
     waitForElectrumTXO(txid)
 
-    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
-
+    data = json.loads(electrum_cli('listunspent'))
     assert(data[0]['spend_address'] != old_cs_utxo['scriptPubKey']['addresses'][0])  # Change should go to a new address
     assert(data[0]['spend_address'] == cs_utxo['scriptPubKey']['addresses'][0])
     assert(data[0]['stake_address'] == addr_cs_stake)
@@ -429,11 +424,9 @@ def doTest():
             raise ValueError('Test stopped')
 
         try:
-            rv = subprocess.run(electrum_bin + ' getinfo', capture_output=True, shell=True)
-            data = json.loads(rv.stdout.strip().decode('utf-8'))
+            data = json.loads(electrum_cli('getinfo'))
             print('e getinfo height', data['blockchain_height'])
-            rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-            data = json.loads(rv.stdout.strip().decode('utf-8'))
+            data = json.loads(electrum_cli('listunspent'))
             if len(data) < 1 or data[0]['prevout_hash'] != old_txid:
                 has_staked = True
                 break
@@ -445,13 +438,11 @@ def doTest():
 
     assert(has_staked)
 
-    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    data = json.loads(electrum_cli('listunspent'))
     assert(len(data) == 1)
 
     logging.info('Balance should be maturing')
-    rv = subprocess.run(electrum_bin + ' getbalance', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    data = json.loads(electrum_cli('getbalance'))
     logging.info(json.dumps(data, indent=4))
     assert(float(data['confirmed']) == 0.0)
     assert(float(data['unmatured']) > 99.0)
@@ -467,26 +458,23 @@ def doTest():
     addr256 = old_cs_utxo['scriptPubKey']['addresses'][0]
 
     logging.info('cs_list_spendchangeaddresses after adding address')
-    subprocess.run(electrum_bin + f' cs_add_spendchangeaddress "{addr256}"', capture_output=True, shell=True)
-    rv = subprocess.run(electrum_bin + ' cs_list_spendchangeaddresses', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    electrum_cli(f'cs_add_spendchangeaddress "{addr256}"')
+    data = json.loads(electrum_cli('cs_list_spendchangeaddresses'))
     logging.info(json.dumps(data, indent=4))
     assert(len(data) == 1)
     assert(data[0] == addr256)
 
     logging.info('cs_list_spendchangeaddresses after removing address')
-    rv = subprocess.run(electrum_bin + f' cs_remove_spendchangeaddress "{addr256}"', capture_output=True, shell=True)
-    rv = subprocess.run(electrum_bin + ' cs_list_spendchangeaddresses', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    electrum_cli(f'cs_remove_spendchangeaddress "{addr256}"')
+    data = json.loads(electrum_cli('cs_list_spendchangeaddresses'))
     logging.info(json.dumps(data, indent=4))
     assert(len(data) == 0)
 
     logging.info('cs_list_spendchangeaddresses after adding address back')
-    subprocess.run(electrum_bin + f' cs_add_spendchangeaddress "{addr256}"', capture_output=True, shell=True)
+    electrum_cli(f'cs_add_spendchangeaddress "{addr256}"')
     rv = subprocess.run(electrum_bin + f' cs_add_spendchangeaddress "{addr256}"', capture_output=True, shell=True)
     assert('Address exists' in rv.stderr.strip().decode('utf-8'))
-    rv = subprocess.run(electrum_bin + ' cs_list_spendchangeaddresses', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    data = json.loads(electrum_cli('cs_list_spendchangeaddresses'))
     logging.info(json.dumps(data, indent=4))
     assert(len(data) == 1)
     assert(data[0] == addr256)
@@ -502,29 +490,22 @@ def doTest():
     waitForElectrumBalance(99)
 
     logging.info('payto should succeed once outputs have matured')
-    rv = subprocess.run(electrum_bin + f' payto {addr1} 10', capture_output=True, shell=True)
-    txhex = rv.stdout.strip().decode('utf-8')
+    txhex = electrum_cli(f'payto {addr1} 10')
 
-    rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
-    txid = rv.stdout.strip().decode('utf-8')
-
+    txid = electrum_cli(f'broadcast {txhex}')
     waitForElectrumTXO(txid)
 
-    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
-
+    data = json.loads(electrum_cli('listunspent'))
     assert(data[0]['prevout_hash'] == txid)
     assert(data[0]['spend_address'] == old_cs_utxo['scriptPubKey']['addresses'][0])
     assert(data[0]['stake_address'] == addr_cs_stake)
 
     logging.info('Confirm removing the coldstakingchangeaddress disables coldstaking')
-    subprocess.run(electrum_bin + ' cs_set_stakechangeaddress ""', capture_output=True, shell=True)
-    rv = subprocess.run(electrum_bin + ' cs_view_stakechangeaddress', capture_output=True, shell=True)
-    assert(rv.stdout.strip().decode('utf-8') == '')
+    electrum_cli('cs_set_stakechangeaddress ""')
+    rv = electrum_cli('cs_view_stakechangeaddress')
+    assert(rv == '')
 
-    rv = subprocess.run(electrum_bin + f' payto {addr1} 0.1', capture_output=True, shell=True)
-    txhex = rv.stdout.strip().decode('utf-8')
-
+    txhex = electrum_cli(f'payto {addr1} 0.1')
     txdecoded = callcli(2, f'decoderawtransaction {txhex}')
     assert(len(txdecoded['vout']) == 2)
     change_utxo = None
@@ -535,12 +516,10 @@ def doTest():
     assert(change_utxo is not None)
     logging.info(json.dumps(txdecoded['vout'], indent=4))
 
-    rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
-    txid = rv.stdout.strip().decode('utf-8')
+    txid = electrum_cli(f' broadcast {txhex}')
     waitForElectrumTXO(txid)
 
-    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    data = json.loads(electrum_cli('listunspent'))
     logging.info('electrum listunspent ' + json.dumps(data, indent=4))
     assert(len(data) == 1)
     assert('spend_address' not in data[0])
@@ -553,20 +532,16 @@ def doTest():
 
     waitForElectrumTXO(txid)
 
-    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    data = json.loads(electrum_cli('listunspent'))
     assert(len(data) == 2)
 
-    rv = subprocess.run(electrum_bin + ' getunusedaddress', capture_output=True, shell=True)
-    electrum_addr1 = rv.stdout.strip().decode('utf-8')
-    rv = subprocess.run(electrum_bin + f' payto {electrum_addr1} !', capture_output=True, shell=True)
-    txhex = rv.stdout.strip().decode('utf-8')
+    electrum_addr1 = electrum_cli('getunusedaddress')
+    txhex = electrum_cli(f'payto {electrum_addr1} !')
 
     txdecoded = callcli(2, f'decoderawtransaction {txhex}')
     assert(len(txdecoded['vin']) == 2)
 
-    rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
-    txid = rv.stdout.strip().decode('utf-8')
+    txid = electrum_cli(f'broadcast {txhex}')
     waitForElectrumTXO(txid)
 
     logging.info('Test spending B->P outputs')
@@ -576,20 +551,83 @@ def doTest():
 
     waitForElectrumTXO(txid)
 
-    rv = subprocess.run(electrum_bin + ' listunspent', capture_output=True, shell=True)
-    data = json.loads(rv.stdout.strip().decode('utf-8'))
+    data = json.loads(electrum_cli('listunspent'))
     assert(len(data) == 2)
 
-    rv = subprocess.run(electrum_bin + f' payto {electrum_addr1} !', capture_output=True, shell=True)
-    txhex = rv.stdout.strip().decode('utf-8')
-
+    txhex = electrum_cli(f'payto {electrum_addr1} !')
     txdecoded = callcli(2, f'decoderawtransaction {txhex}')
     assert(len(txdecoded['vin']) == 2)
 
-    rv = subprocess.run(electrum_bin + f' broadcast {txhex}', capture_output=True, shell=True)
-    txid = rv.stdout.strip().decode('utf-8')
+    txid = electrum_cli(f'broadcast {txhex}')
     waitForElectrumTXO(txid)
 
+    logging.info('Test setting an extaddress as the coldstaking change address')
+    # Remove any spendshangeaddresses
+    data = json.loads(electrum_cli('cs_list_spendchangeaddresses'))
+    for addr in data:
+        electrum_cli(f'cs_remove_spendchangeaddress "{addr}"')
+    data = json.loads(electrum_cli('cs_list_spendchangeaddresses'))
+    assert(len(data) == 0)
+
+    rv = electrum_cli(f' cs_set_stakechangeaddress "{extaddr_hotwallet}"')
+    rv = electrum_cli('cs_view_stakechangeaddress')
+    assert(rv == extaddr_hotwallet)
+
+    addr1 = callcli(1, 'getnewaddress')
+    key_info = callcli(3, '-rpcwallet={} deriverangekeys 0 10 "{}"'.format('hotwallet', extaddr_hotwallet))
+
+    for i in range(5):
+        txhex = electrum_cli(f'payto {addr1} 0.1')
+        txdecoded = callcli(2, f'decoderawtransaction {txhex}')
+        assert(len(txdecoded['vout']) == 2)
+        cs_utxo = None
+        for utxo in txdecoded['vout']:
+            if 'stakeaddresses' in utxo['scriptPubKey']:
+                cs_utxo = utxo
+                break
+        assert(cs_utxo['scriptPubKey']['stakeaddresses'][0] == key_info[i])
+
+    rv = electrum_cli(f' cs_get_stakechangeaddressderives --address "{extaddr_hotwallet}"')
+    assert(int(rv) == 5)
+    rv = electrum_cli(f' cs_get_stakechangeaddressderives')
+    assert(int(rv) == 5)
+
+    electrum_cli(f' cs_set_stakechangeaddressderives 1')
+    rv = electrum_cli(f' cs_get_stakechangeaddressderives')
+    assert(int(rv) == 1)
+    txhex = electrum_cli(f'payto {addr1} 0.1')
+    txdecoded = callcli(2, f'decoderawtransaction {txhex}')
+    assert(len(txdecoded['vout']) == 2)
+    cs_utxo = None
+    for utxo in txdecoded['vout']:
+        if 'stakeaddresses' in utxo['scriptPubKey']:
+            cs_utxo = utxo
+            break
+    assert(cs_utxo['scriptPubKey']['stakeaddresses'][0] == key_info[1])
+
+    try:
+        too_low = -1
+        electrum_cli(f' cs_set_stakechangeaddressderives "{too_low}"')
+        assert False, 'Should fail'
+    except Exception as e:
+        assert('New value can\'t' in str(e))
+    try:
+        too_high = str(0x80000000)
+        electrum_cli(f' cs_set_stakechangeaddressderives "{too_high}"')
+        assert False, 'Should fail'
+    except Exception as e:
+        assert('New value can\'t' in str(e))
+
+    last_value = str(0x80000000 -1)
+    electrum_cli(f' cs_set_stakechangeaddressderives "{last_value}"')
+
+    txhex = electrum_cli(f'payto {addr1} 0.1')  # Should work
+    try:
+        txhex = electrum_cli(f'payto {addr1} 0.1')
+        assert False, 'Should fail'
+    except Exception as e:
+        assert('key chain exhausted' in str(e))
+    electrum_cli(f' cs_set_stakechangeaddressderives 0')
 
     if PERSIST:
         callcli(0, 'reservebalance false')
