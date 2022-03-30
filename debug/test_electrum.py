@@ -629,6 +629,30 @@ def doTest():
         assert('key chain exhausted' in str(e))
     electrum_cli(f' cs_set_stakechangeaddressderives 0')
 
+    logging.info('Test sending to stealth addresses')
+    sxaddr1 = callcli(1, 'getnewstealthaddress')
+    txhex = electrum_cli(f'payto {sxaddr1} 0.1')
+    txdecoded = callcli(2, f'decoderawtransaction {txhex}')
+    assert(len(txdecoded['vout']) == 3)
+
+    data_utxo = None
+    for utxo in txdecoded['vout']:
+        if 'type' in utxo and utxo['type'] == 'data':
+            data_utxo = utxo
+            break
+    assert(data_utxo is not None)
+    sent_utxo = txdecoded['vout'][data_utxo['n'] - 1]
+
+    ephem_pk = data_utxo['data_hex'][2:]
+    derived = callcli(1, f'derivefromstealthaddress {sxaddr1} {ephem_pk}')
+    assert(derived['address'] == sent_utxo['scriptPubKey']['addresses'][0])
+
+    txid = electrum_cli(f'broadcast {txhex}')
+    waitForElectrumTXO(txid)
+
+    ft1 = callcli(1, 'filtertransactions')
+    assert(ft1[0]['outputs'][0]['address'] == derived['address'])
+
     if PERSIST:
         callcli(0, 'reservebalance false')
         callcli(0, 'walletsettings stakelimit "%s"' % (dumpje({'height': 0})))
