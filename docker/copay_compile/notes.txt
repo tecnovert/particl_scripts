@@ -1,0 +1,37 @@
+
+git clone git@github.com:tecnovert/copay.git
+
+mkdir output
+
+~/.keystore must exist
+
+docker build -t copay_build .
+docker run \
+    --mount type=bind,source="$(pwd)"/copay,target=/copay_src \
+    --mount type=bind,source="$(pwd)"/output,target=/output \
+    --mount type=bind,source="$HOME"/.keystore,target=/copay.keystore \
+    -it copay_build /bin/bash
+
+# Run in container:
+    npm install
+    npm run apply:particl
+    npm run prepare:particl
+    npm run final:android
+    cp -r /copay_src/platforms/android/app/build/outputs/ /output/android
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

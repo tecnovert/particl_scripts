@@ -631,6 +631,7 @@ def doTest():
 
     logging.info('Test sending to stealth addresses')
     sxaddr1 = callcli(1, 'getnewstealthaddress')
+    logging.info(f'sxaddr1: {sxaddr1}')
     txhex = electrum_cli(f'payto {sxaddr1} 0.1')
     txdecoded = callcli(2, f'decoderawtransaction {txhex}')
     assert(len(txdecoded['vout']) == 3)
