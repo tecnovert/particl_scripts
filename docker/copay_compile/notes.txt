@@ -19,19 +19,3 @@ docker run \
     npm run final:android
     cp -r /copay_src/platforms/android/app/build/outputs/ /output/android
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

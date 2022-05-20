@@ -32,7 +32,6 @@ COIN = 100000000
 
 low_filter = 100.0
 high_filter = 2000.0
-utxo_limit = 60
 
 
 class SkipIteration(Exception):
@@ -66,11 +65,15 @@ def callrpc(cmd, network='', wallet=''):
     return out[0]
 
 
-def get_sendcmd(data):
+def get_sendcmd(data, ignore_set, args):
     by_address = {}
     total_by_address = {}
 
     for utxo in data:
+        if args.testonly:
+            outputid = utxo['txid'] + ',' + str(utxo['vout'])
+            if outputid in ignore_set:
+                continue
         utxo_list = by_address.get(utxo['address'], [])
         utxo_list.append(utxo)
         by_address[utxo['address']] = utxo_list
@@ -118,7 +121,7 @@ def get_sendcmd(data):
                 total_out += decimal.Decimal(utxo['amount'] * COIN)
                 del by_amount[0]
 
-                if len(to_join) >= utxo_limit:
+                if len(to_join) >= args.inputlimit:
                     break
 
             if len(to_join) < 1:
@@ -133,13 +136,25 @@ def get_sendcmd(data):
             cmd += '\\"\\" '    # comment_to
             cmd += '5 '         # ringsize
             cmd += '1 '         # inputs_per_sig
-            cmd += 'false '     # test_fee
+            if args.includewatchonly:
+                cmd += 'true '     # test_fee
+            else:
+                cmd += 'false '     # test_fee
             cmd += '"{\\"inputs\\":['
             cmd += '{\\"tx\\":\\"' + last_utxo['txid'] + '\\",\\"n\\":' + str(last_utxo['vout']) + '}'
             for utxo in to_join:
                 cmd += ',{\\"tx\\":\\"' + utxo['txid'] + '\\",\\"n\\":' + str(utxo['vout']) + '}'
 
-            cmd += ']}"'
+            cmd += ']'
+            if args.includewatchonly:
+                cmd += ',\\"show_hex\\":true'
+                cmd += ',\\"includeWatching\\":true'
+            cmd += '}"'
+            if args.testonly:
+                ignore_set.add(last_utxo['txid'] + ',' + str(last_utxo['vout']))
+                for utxo in to_join:
+                    ignore_set.add(utxo['txid'] + ',' + str(utxo['vout']))
+
             return cmd
     raise NoneOutstanding
 
@@ -163,7 +178,9 @@ def main():
     parser.add_argument('--minwait', dest='minwait', help='Minimum number of seconds to wait before repeating [1, 3600] (default=60)', type=int, default=60, required=False)
     parser.add_argument('--maxwait', dest='maxwait', help='Maximum number of seconds to wait before repeating [1, 7200] (default=600)', type=int, default=600, required=False)
     parser.add_argument('--testonly', dest='testonly', help='If true sendtypeto command will not be run on daemon (default=false)', type=make_boolean, default=False, required=False)
+    parser.add_argument('--includewatchonly', dest='includewatchonly', help='Construct sendtypeto command with "includeWatching" set (default=false)', type=make_boolean, default=False, required=False)
     parser.add_argument('--minblockdiff', dest='minblockdiff', help='Minimum number of blocks to wait before repeating [0, 600] (default=1)', type=int, default=1, required=False)
+    parser.add_argument('--inputlimit', dest='inputlimit', help='Maximum number of outputs to join per transaction [1, 600] (default=60)', type=int, default=60, required=False)
     args = parser.parse_args()
 
     if args.minwait < 1 or args.minwait > 3600:
@@ -172,11 +189,14 @@ def main():
         raise argparse.ArgumentTypeError('Invalid maxwait')
     if args.minblockdiff < 0 or args.minblockdiff > 600:
         raise argparse.ArgumentTypeError('Invalid minblockdiff')
+    if args.inputlimit < 1 or args.inputlimit > 600:
+        raise argparse.ArgumentTypeError('Invalid inputlimit')
 
     print('network', 'mainnet' if args.network == '' else args.network)
 
     delay_event = threading.Event()
 
+    ignore_set = set()
     last_height = 0
     while True:
         data = json.loads(callrpc('listunspent', args.network, args.wallet))
@@ -186,7 +206,7 @@ def main():
             if height - last_height < args.minblockdiff:
                 print('Blocks since last payout less than minblockdiff setting:', height - last_height)
                 raise SkipIteration
-            cmd = get_sendcmd(data)
+            cmd = get_sendcmd(data, ignore_set, args)
             print('\nChain Height', height)
             print('Command', cmd)
             last_height = height
