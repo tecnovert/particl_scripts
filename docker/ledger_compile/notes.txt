@@ -1,0 +1,28 @@
+https://ledger.readthedocs.io/en/latest/userspace/setup.html
+https://gist.github.com/tecnovert/86733cd6db038612e03d2705aa9dba01
+
+docker build -t particl_ledger_1.2.14 .
+docker run -it -rm --privileged -v /dev/bus/usb:/dev/bus/usb particl_ledger_1.2.14 /bin/bash
+
+export BOLOS_SDK=/home/nanos-secure-sdk COIN=particl
+export CLANGPATH=/home/bolos_env/clang-arm-fropi/bin/
+export GCCPATH=/home/bolos_env/gcc-arm-none-eabi-10-2020-q4-major/bin/
+
+cd /home/ledger-app-particl_tv
+git pull
+make clean
+make -B
+
+Should end with:
+[LINK] bin/app.elf
+
+Connect Ledger Nano S and input pin no.
+    lsusb
+        ... ID 2c97:1011
+
+    Remove old app if installed
+        make delete
+
+    make load
+
+        Application full hash : 086eb399b3164134a688d3943a1abba995e8d11ac1c7d582a2206a28a56ef6f5
