@@ -288,6 +288,20 @@ def make_electrum_cli_func(electrum_bin):
     return cli_func
 
 
+def getAddressFromRPC(rpc_data):
+    spk = rpc_data['scriptPubKey']
+    if 'addresses' in spk:
+        return spk['addresses'][0]
+    return spk['address']
+
+
+def getStakeAddressFromRPC(rpc_data):
+    spk = rpc_data['scriptPubKey']
+    if 'stakeaddresses' in spk:
+        return spk['stakeaddresses'][0]
+    return spk['stakeaddress']
+
+
 def doTest():
 
     m1 = callcli(3, 'mnemonic new')['mnemonic']
@@ -375,7 +389,7 @@ def doTest():
     assert(len(txdecoded['vout']) == 2)
     cs_utxo = None
     for utxo in txdecoded['vout']:
-        if 'stakeaddresses' in utxo['scriptPubKey']:
+        if 'stakeaddresses' in utxo['scriptPubKey'] or 'stakeaddress' in utxo['scriptPubKey']:
             cs_utxo = utxo
             break
 
@@ -385,7 +399,7 @@ def doTest():
     waitForElectrumTXO(txid)
 
     data = json.loads(electrum_cli('listunspent'))
-    assert(data[0]['spend_address'] == cs_utxo['scriptPubKey']['addresses'][0])
+    assert(data[0]['spend_address'] == getAddressFromRPC(cs_utxo))
     assert(data[0]['stake_address'] == addr_cs_stake)
 
     logging.info('Confirm coldstaking outputs can be spent')
@@ -395,7 +409,7 @@ def doTest():
     assert(len(txdecoded['vout']) == 2)
     cs_utxo = None
     for utxo in txdecoded['vout']:
-        if 'stakeaddresses' in utxo['scriptPubKey']:
+        if 'stakeaddresses' in utxo['scriptPubKey'] or 'stakeaddress' in utxo['scriptPubKey']:
             cs_utxo = utxo
             break
 
@@ -403,8 +417,8 @@ def doTest():
     waitForElectrumTXO(txid)
 
     data = json.loads(electrum_cli('listunspent'))
-    assert(data[0]['spend_address'] != old_cs_utxo['scriptPubKey']['addresses'][0])  # Change should go to a new address
-    assert(data[0]['spend_address'] == cs_utxo['scriptPubKey']['addresses'][0])
+    assert(data[0]['spend_address'] != getAddressFromRPC(old_cs_utxo))  # Change should go to a new address
+    assert(data[0]['spend_address'] == getAddressFromRPC(cs_utxo))
     assert(data[0]['stake_address'] == addr_cs_stake)
 
     logging.info('Waiting for coldstaking output to stake')
@@ -455,7 +469,7 @@ def doTest():
 
     logging.info('Set static spend changeaddress')
     old_cs_utxo = cs_utxo
-    addr256 = old_cs_utxo['scriptPubKey']['addresses'][0]
+    addr256 = getAddressFromRPC(old_cs_utxo)
 
     logging.info('cs_list_spendchangeaddresses after adding address')
     electrum_cli(f'cs_add_spendchangeaddress "{addr256}"')
@@ -497,7 +511,7 @@ def doTest():
 
     data = json.loads(electrum_cli('listunspent'))
     assert(data[0]['prevout_hash'] == txid)
-    assert(data[0]['spend_address'] == old_cs_utxo['scriptPubKey']['addresses'][0])
+    assert(data[0]['spend_address'] == getAddressFromRPC(old_cs_utxo))
     assert(data[0]['stake_address'] == addr_cs_stake)
 
     logging.info('Confirm removing the coldstakingchangeaddress disables coldstaking')
@@ -582,10 +596,10 @@ def doTest():
         assert(len(txdecoded['vout']) == 2)
         cs_utxo = None
         for utxo in txdecoded['vout']:
-            if 'stakeaddresses' in utxo['scriptPubKey']:
+            if 'stakeaddresses' in utxo['scriptPubKey'] or 'stakeaddress' in utxo['scriptPubKey']:
                 cs_utxo = utxo
                 break
-        assert(cs_utxo['scriptPubKey']['stakeaddresses'][0] == key_info[i])
+        assert(getStakeAddressFromRPC(cs_utxo) == key_info[i])
 
     rv = electrum_cli(f' cs_get_stakechangeaddressderives --address "{extaddr_hotwallet}"')
     assert(int(rv) == 5)
@@ -600,10 +614,10 @@ def doTest():
     assert(len(txdecoded['vout']) == 2)
     cs_utxo = None
     for utxo in txdecoded['vout']:
-        if 'stakeaddresses' in utxo['scriptPubKey']:
+        if 'stakeaddresses' in utxo['scriptPubKey'] or 'stakeaddress' in utxo['scriptPubKey']:
             cs_utxo = utxo
             break
-    assert(cs_utxo['scriptPubKey']['stakeaddresses'][0] == key_info[1])
+    assert(getStakeAddressFromRPC(cs_utxo) == key_info[1])
 
     try:
         too_low = -1
@@ -646,7 +660,7 @@ def doTest():
 
     ephem_pk = data_utxo['data_hex'][2:]
     derived = callcli(1, f'derivefromstealthaddress {sxaddr1} {ephem_pk}')
-    assert(derived['address'] == sent_utxo['scriptPubKey']['addresses'][0])
+    assert(derived['address'] == getAddressFromRPC(sent_utxo))
 
     txid = electrum_cli(f'broadcast {txhex}')
     waitForElectrumTXO(txid)
